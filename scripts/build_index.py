@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from issue_graphrag.chunker import documents_to_text_units
 from issue_graphrag.config import load_settings
@@ -22,6 +23,12 @@ def make_llm():
     return MockLLMClient()
 
 
+def resolve_input_path(input_path: str) -> Path:
+    settings = load_settings()
+    path = Path(input_path)
+    return path if path.is_absolute() else settings.raw_data_dir / path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a lightweight GraphRAG index from source documents.")
     parser.add_argument("input", help="Path to raw SourceDocument JSON list")
@@ -30,7 +37,7 @@ def main() -> None:
     settings = load_settings()
     llm = make_llm()
 
-    raw_docs = read_json(settings.raw_data_dir / args.input if not args.input.startswith("/") else args.input)
+    raw_docs = read_json(resolve_input_path(args.input))
     documents = [SourceDocument.model_validate(item) for item in raw_docs]
 
     text_units = documents_to_text_units(documents)
