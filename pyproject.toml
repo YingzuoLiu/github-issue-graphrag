@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "github-issue-graphrag"
+version = "0.1.0"
+description = "A lightweight GraphRAG pipeline for analyzing GitHub issues and repository documents."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Yingzuo Liu" }
+]
+dependencies = [
+  "networkx>=3.2",
+  "pydantic>=2.6",
+  "python-dotenv>=1.0",
+  "requests>=2.31",
+  "numpy>=1.26",
+  "scikit-learn>=1.4",
+  "rank-bm25>=0.2.2",
+  "tqdm>=4.66"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+  "mypy>=1.8"
+]
+embeddings = [
+  "sentence-transformers>=2.7"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
