@@ -29,25 +29,42 @@ Input text:
 
 
 COMMUNITY_REPORT_PROMPT = """
-You are summarizing a community in a repository knowledge graph.
+You are summarizing one community from a GitHub repository knowledge graph.
 
-Use the provided entities and relationships to write a concise community report.
+The report will be used for:
+- global GraphRAG search
+- contribution opportunity analysis
+- repository issue triage
+- project demo explanation
+
+Use the provided entities and relationships only. Do not invent issue numbers, files, or features.
+
+Write a concise but useful technical report.
+
 Focus on:
-- The main technical theme of this community
-- Important entities and how they relate
-- Why this community matters for issue analysis or contribution planning
-- Any uncertainty or missing evidence
+1. Technical theme: what this community is mainly about.
+2. Key entities: the important files, features, APIs, modules, tools, or issues.
+3. Contribution opportunities: concrete implementation/debugging opportunities suggested by the graph.
+4. Evidence and uncertainty: what is supported by the graph, and what remains unclear.
 
-Return JSON:
+Return strict JSON with this shape:
 {
-  "title": "short title",
-  "summary": "clear summary grounded in the graph",
-  "rating": 1.0
+  "title": "short specific title",
+  "summary": "Use markdown bullets. Include: Technical theme, Key entities, Contribution opportunities, Evidence / uncertainty.",
+  "rating": 4.0
 }
+
+Rating guide:
+- 5.0 = highly actionable contribution area with clear implementation path
+- 4.0 = useful technical theme with several connected entities
+- 3.0 = relevant but needs more evidence
+- 2.0 = narrow or weakly connected
+- 1.0 = singleton / low-value community
 
 Community data:
 {community_data}
 """.strip()
+
 
 
 LOCAL_ANSWER_PROMPT = """
