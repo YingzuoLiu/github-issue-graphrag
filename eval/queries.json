@@ -1,0 +1,191 @@
+[
+  {
+    "id": "graph_rag_latency",
+    "category": "local_relationship",
+    "question": "Why is graph-rag slow and which components are involved?",
+    "expected_entities": [
+      "Graph RAG",
+      "tg-invoke-graph-rag",
+      "graph_rag.Processor",
+      "Pulsar",
+      "Memgraph",
+      "TriplesClientSpec",
+      "TriplesQueryBatch"
+    ]
+  },
+  {
+    "id": "graph_rag_direct_bolt_fix",
+    "category": "local_relationship",
+    "question": "What fix is proposed for graph-rag latency?",
+    "expected_entities": [
+      "Graph RAG",
+      "Memgraph",
+      "Bolt",
+      "Pulsar",
+      "triples-query-memgraph"
+    ]
+  },
+  {
+    "id": "kafka_backend_issue",
+    "category": "single_lookup",
+    "question": "What is the Kafka backend issue about?",
+    "expected_entities": [
+      "Issue #944",
+      "Kafka",
+      "kafka_backend.py",
+      "Consumer",
+      "Producer",
+      "unsubscribe()"
+    ]
+  },
+  {
+    "id": "kafka_consumer_blocking",
+    "category": "local_relationship",
+    "question": "Why do Kafka consumers block and what should be investigated?",
+    "expected_entities": [
+      "Kafka",
+      "Consumer",
+      "session.timeout.ms",
+      "heartbeat.interval.ms",
+      "auto.offset.reset",
+      "enable.auto.commit"
+    ]
+  },
+  {
+    "id": "hybrid_retrieval_design",
+    "category": "local_relationship",
+    "question": "How can TrustGraph improve document retrieval with hybrid retrieval?",
+    "expected_entities": [
+      "Hybrid Retrieval",
+      "Document RAG",
+      "BM25",
+      "RRF",
+      "Elasticsearch",
+      "OpenSearch",
+      "SQLite FTS5"
+    ]
+  },
+  {
+    "id": "hybrid_retrieval_exact_terms",
+    "category": "single_lookup",
+    "question": "Why does hybrid retrieval help with exact-term matching?",
+    "expected_entities": [
+      "Hybrid Retrieval",
+      "BM25",
+      "TF-IDF",
+      "RRF",
+      "Document RAG"
+    ]
+  },
+  {
+    "id": "document_rag_reranker",
+    "category": "local_relationship",
+    "question": "What is missing between Qdrant top-k and document-rag synthesis?",
+    "expected_entities": [
+      "Document RAG",
+      "Qdrant",
+      "document_rag.py",
+      "RerankerClient",
+      "Cross-encoder Reranking",
+      "Cohere Rerank API"
+    ]
+  },
+  {
+    "id": "cross_encoder_reranking",
+    "category": "local_relationship",
+    "question": "How would cross-encoder reranking improve document-rag and graph-rag?",
+    "expected_entities": [
+      "Cross-encoder Reranking",
+      "Document RAG",
+      "Graph RAG",
+      "RerankerClient",
+      "Cohere Rerank API",
+      "BGE-reranker"
+    ]
+  },
+  {
+    "id": "workspace_export_import",
+    "category": "single_lookup",
+    "question": "What is the Workspace Export/Import contribution opportunity?",
+    "expected_entities": [
+      "Workspace Export/Import",
+      "tg-export-workspace",
+      "tg-import-workspace",
+      "manifest.json",
+      "triples.nq"
+    ]
+  },
+  {
+    "id": "config_as_code",
+    "category": "local_relationship",
+    "question": "How could tg-apply-config improve TrustGraph configuration management?",
+    "expected_entities": [
+      "tg-apply-config",
+      "TrustGraph",
+      "manifest.yaml",
+      "config-svc",
+      "tg-put-config-items"
+    ]
+  },
+  {
+    "id": "image_to_text_service",
+    "category": "single_lookup",
+    "question": "What is the proposed image-to-text service infrastructure?",
+    "expected_entities": [
+      "ImageToTextService",
+      "ImageToTextResult",
+      "OpenAI GPT-4o vision",
+      "flow.py",
+      "llm.py"
+    ]
+  },
+  {
+    "id": "semantic_chunking",
+    "category": "single_lookup",
+    "question": "What is the semantic chunking proposal about?",
+    "expected_entities": [
+      "SemanticChunker",
+      "LangChain",
+      "spaCy",
+      "chunking/semantic/chunker.py",
+      "chunking/recursive/chunker.py"
+    ]
+  },
+  {
+    "id": "ontology_rag_extraction",
+    "category": "local_relationship",
+    "question": "What does the ontology RAG extraction issue involve?",
+    "expected_entities": [
+      "Agent-based extraction",
+      "kg-extract-agent",
+      "extract.py",
+      "kg-extract-definitions",
+      "kg-extract-relationships"
+    ]
+  },
+  {
+    "id": "docker_deployment",
+    "category": "global_theme",
+    "question": "What deployment-related contribution opportunities appear in this repo?",
+    "expected_entities": [
+      "docker compose",
+      "TrustGraph Configuration Builder",
+      "Issue #912",
+      "apachepulsar/pulsar:4.1.0",
+      "qdrant/qdrant:v1.16.0"
+    ]
+  },
+  {
+    "id": "repo_contribution_opportunities",
+    "category": "global_theme",
+    "question": "What are the main technical contribution opportunities in this repo?",
+    "expected_entities": [
+      "Graph RAG",
+      "Hybrid Retrieval",
+      "Kafka",
+      "Cross-encoder Reranking",
+      "Workspace Export/Import",
+      "TrustGraph Configuration Builder"
+    ]
+  }
+]
