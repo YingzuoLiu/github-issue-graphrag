@@ -30,7 +30,7 @@ def main() -> None:
     if mode == "naive":
         results = NaiveBM25Search(text_units).search(args.question, top_k=5)
     elif mode == "local":
-        results = local_search(graph, text_units, reports, args.question, top_k_entities=5)
+        results = local_search(graph, reports, text_units, args.question, top_k=8)
     else:
         results = global_search(reports, args.question, top_k=8)
 
