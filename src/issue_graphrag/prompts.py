@@ -14,14 +14,14 @@ Relationship guidelines:
 - Include source evidence in the description when useful.
 
 Return strict JSON with this shape:
-{
+{{
   "entities": [
-    {"name": "RRF", "type": "ALGORITHM", "description": "Reciprocal Rank Fusion for combining ranked retrieval results"}
+    {{"name": "RRF", "type": "ALGORITHM", "description": "Reciprocal Rank Fusion for combining ranked retrieval results"}}
   ],
   "relationships": [
-    {"source": "RRF", "target": "Hybrid Retrieval", "relation": "improves", "description": "RRF is proposed to improve hybrid retrieval result fusion", "weight": 1.0}
+    {{"source": "RRF", "target": "Hybrid Retrieval", "relation": "improves", "description": "RRF is proposed to improve hybrid retrieval result fusion", "weight": 1.0}}
   ]
-}
+}}
 
 Input text:
 {text}
@@ -39,11 +39,11 @@ Focus on:
 - Any uncertainty or missing evidence
 
 Return JSON:
-{
+{{
   "title": "short title",
   "summary": "clear summary grounded in the graph",
   "rating": 1.0
-}
+}}
 
 Community data:
 {community_data}
@@ -73,11 +73,11 @@ GLOBAL_MAP_PROMPT = """
 Given the user question and one or more community reports, extract key points that help answer the question.
 
 Return strict JSON:
-{
+{{
   "points": [
-    {"description": "point grounded in the reports", "score": 80}
+    {{"description": "point grounded in the reports", "score": 80}}
   ]
-}
+}}
 
 Use score 0 if the reports do not help answer the question.
 
