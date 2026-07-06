@@ -52,6 +52,8 @@ This makes it easier to answer questions like:
 
 ## Demo UI
 
+The Streamlit demo provides a small interface for selecting retrieval mode, running demo questions, generating grounded answers, and inspecting retrieved context.
+
 ![Streamlit demo](examples/demo_screenshot.png)
 
 ## Current features
@@ -79,6 +81,7 @@ This makes it easier to answer questions like:
 - Global community-report retrieval
 - Naive lexical baseline
 - Grounded answer generation with `--answer`
+- Streamlit demo app
 
 ## Setup
 
@@ -93,7 +96,7 @@ Install dependencies:
 
 ```bash
 python -m pip install -e . --no-deps
-python -m pip install requests networkx pydantic python-dotenv rank-bm25 tqdm scikit-learn
+python -m pip install requests networkx pydantic python-dotenv rank-bm25 tqdm scikit-learn streamlit
 ```
 
 Copy the environment file:
@@ -181,6 +184,14 @@ data/processed/community_reports.json
 ```
 
 without rebuilding the full graph.
+
+## Run the Streamlit demo
+
+```bash
+streamlit run app.py
+```
+
+The local app lets you choose retrieval mode, run demo questions, generate grounded answers, and inspect the retrieved local/global context.
 
 ## Query modes
 
@@ -319,6 +330,8 @@ scripts/
   inspect_relations.py
   regenerate_reports.py
   query.py
+
+app.py
 ```
 
 ## Known limitations
@@ -353,11 +366,13 @@ This project demonstrates:
 
 MVP complete.
 
-Next possible steps:
+## Future work
 
-- Add Streamlit UI
-- Add graph visualization with PyVis
-- Add persistent LLM cache
-- Add evaluation set for demo queries
-- Add relation direction cleanup
-- Add richer source citations in generated answers
+The MVP is complete. Possible extensions include:
+
+- **Graph visualization**: add a PyVis or NetworkX-based view for inspecting entity communities and high-degree nodes.
+- **Persistent LLM cache**: cache extraction and report-generation calls to reduce cost and make rebuilds resumable.
+- **Relation direction cleanup**: add validation rules for direction-sensitive relationships such as `improves`, `depends_on`, and `uses`.
+- **Evaluation set**: add a small `examples/eval_queries.json` with expected entities, sources, and answer criteria for demo queries.
+- **Richer source citation formatting**: improve generated answers so they cite issue numbers and source snippets more consistently.
+- **Optional deployment**: package a Streamlit Cloud demo with sample data and secrets management.
