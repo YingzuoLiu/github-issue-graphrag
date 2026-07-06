@@ -5,6 +5,7 @@ import json
 from pydantic import ValidationError
 
 from issue_graphrag.llm.client import LLMClient
+from issue_graphrag.llm.json_utils import extract_json_object
 from issue_graphrag.models import Entity, ExtractionResult, Relationship, TextUnit
 from issue_graphrag.prompts import ENTITY_EXTRACTION_PROMPT
 
@@ -15,11 +16,11 @@ def _normalize_name(name: str) -> str:
 
 def extract_from_text_unit(text_unit: TextUnit, llm: LLMClient) -> ExtractionResult:
     """Extract entities and relationships from a TextUnit using an LLM."""
-    prompt = ENTITY_EXTRACTION_PROMPT.format(text=text_unit.text)
+    prompt = ENTITY_EXTRACTION_PROMPT.replace("{text}", text_unit.text)
     raw = llm.complete(prompt)
 
     try:
-        parsed = json.loads(raw)
+        parsed = extract_json_object(raw)
         result = ExtractionResult.model_validate(parsed)
     except (json.JSONDecodeError, ValidationError) as exc:
         raise ValueError(f"LLM extraction output is not valid JSON: {raw}") from exc
