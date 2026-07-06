@@ -25,7 +25,7 @@ Community detection
   ↓
 Community report generation
   ↓
-Local / global / naive retrieval
+Local / global / BM25 retrieval
   ↓
 Grounded answer generation
 ```
@@ -79,7 +79,7 @@ The Streamlit demo provides a small interface for selecting retrieval mode, runn
 - Relation inspection script
 - Local GraphRAG retrieval
 - Global community-report retrieval
-- Naive lexical baseline
+- BM25 lexical baseline
 - Grounded answer generation with `--answer`
 - Streamlit demo app
 
@@ -96,7 +96,7 @@ Install dependencies:
 
 ```bash
 python -m pip install -e . --no-deps
-python -m pip install requests networkx pydantic python-dotenv rank-bm25 tqdm scikit-learn streamlit
+python -m pip install requests networkx pydantic python-dotenv rank-bm25 tqdm streamlit
 ```
 
 Copy the environment file:
@@ -223,9 +223,9 @@ With answer generation:
 python scripts/query.py "What are the main technical contribution opportunities in this repo?" --mode global --answer
 ```
 
-### Naive lexical baseline
+### BM25 lexical baseline
 
-Useful as a comparison baseline.
+Useful as a stronger lexical comparison baseline. The CLI mode is still named `naive` for compatibility, but the implementation uses `rank_bm25.BM25Okapi`.
 
 ```bash
 python scripts/query.py "What is the Kafka backend issue about?" --mode naive
@@ -259,7 +259,7 @@ python scripts/query.py "How can TrustGraph improve document retrieval with hybr
 Expected answer should mention:
 
 - Document-RAG currently relying on semantic/vector retrieval
-- BM25 or TF-IDF keyword retrieval
+- BM25 keyword retrieval
 - vector + keyword fusion
 - RRF
 - possible backends such as Elasticsearch, OpenSearch, or SQLite FTS5
@@ -359,7 +359,7 @@ This project demonstrates:
 - How to connect a real LLM to structured extraction
 - How to normalize noisy LLM outputs
 - How to inspect and debug graph quality
-- How to compare GraphRAG retrieval with a naive lexical baseline
+- How to compare GraphRAG retrieval with a BM25 lexical baseline
 - How to generate grounded answers from local and global graph context
 
 ## Status
