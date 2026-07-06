@@ -8,6 +8,7 @@ from issue_graphrag.models import CommunityReport, TextUnit
 from issue_graphrag.retrieval.global_search import global_search
 from issue_graphrag.retrieval.local_search import local_search
 from issue_graphrag.retrieval.naive_search import naive_search
+from issue_graphrag.retrieval.router import route_query
 from issue_graphrag.storage.json_store import read_graph, read_json
 
 
@@ -65,29 +66,24 @@ def make_llm():
     raise ValueError(f"Unsupported LLM_PROVIDER: {settings.llm_provider}")
 
 
-def route_query(mode: str, question: str, graph, text_units, reports):
-    if mode == "auto":
-        lowered = question.lower()
-        if any(word in lowered for word in ["main", "overview", "themes", "opportunities", "summarize"]):
-            mode = "global"
-        else:
-            mode = "local"
+def retrieve_context(mode: str, question: str, graph, text_units, reports):
+    resolved_mode = route_query(question, mode)
 
-    if mode == "naive":
+    if resolved_mode == "naive":
         results = naive_search(text_units, question, top_k=8)
-    elif mode == "local":
+    elif resolved_mode == "local":
         results = local_search(graph, reports, text_units, question, top_k=8)
-    elif mode == "global":
+    elif resolved_mode == "global":
         results = global_search(reports, question, top_k=8)
     else:
-        raise ValueError(f"Unsupported mode: {mode}")
+        raise ValueError(f"Unsupported mode: {resolved_mode}")
 
     context = "\n\n".join(
         f"### {result.id} | score={result.score:.3f}\n\n{result.text}"
         for result in results
     )
 
-    return mode, context
+    return resolved_mode, context
 
 
 st.set_page_config(page_title="GitHub Issue GraphRAG", layout="wide")
@@ -120,7 +116,7 @@ if st.button("Run query", type="primary"):
     graph, text_units, reports = load_processed_data()
 
     with st.spinner("Retrieving GraphRAG context..."):
-        resolved_mode, context = route_query(mode, question, graph, text_units, reports)
+        resolved_mode, context = retrieve_context(mode, question, graph, text_units, reports)
 
     st.markdown(f"**Resolved mode:** `{resolved_mode}`")
 
