@@ -1,103 +1,359 @@
 # GitHub Issue GraphRAG
 
-A lightweight GraphRAG pipeline for analyzing GitHub repositories through issues, pull requests, and documentation.
+A lightweight GraphRAG prototype for analyzing GitHub issues, extracting technical entities and relationships, building a repository knowledge graph, and answering contribution-oriented questions with grounded context.
 
-The project builds an entity-relation graph from GitHub issue discussions and repository documents, then supports three query modes:
+The project uses TrustGraph issues as the demo dataset, but the pipeline is designed to work with any GitHub repository issue set.
 
-- **Naive search**: standard chunk retrieval baseline.
-- **Local graph search**: entity-centric retrieval for issue, module, and design-decision questions.
-- **Global community search**: community-report summarization for repository-level themes and contribution opportunities.
+## What this project does
 
-## Motivation
-
-Traditional RAG retrieves similar text chunks. That is useful for direct lookup, but it often struggles with questions that require cross-issue reasoning, module impact analysis, or repository-level summarization.
-
-This project explores whether a lightweight GraphRAG pipeline can help answer questions such as:
-
-- What are the main technical themes in this repository?
-- Which modules may be affected by this issue?
-- How are retrieval-related issues connected?
-- What contribution areas look promising?
-- Are there related issues or pull requests that may conflict with this change?
-
-## Planned pipeline
+This project turns GitHub issues into a small repository knowledge graph:
 
 ```text
-GitHub issues / PRs / README / docs
-  -> TextUnits
-  -> Entity & Relationship Extraction
-  -> Knowledge Graph
-  -> Community Detection
-  -> Community Reports
-  -> Naive / Local / Global Query
+GitHub issues
+  ↓
+TextUnit chunking
+  ↓
+LLM entity / relationship extraction
+  ↓
+Entity normalization
+  ↓
+Graph construction
+  ↓
+Graph-level normalization
+  ↓
+Community detection
+  ↓
+Community report generation
+  ↓
+Local / global / naive retrieval
+  ↓
+Grounded answer generation
 ```
 
-## Current scope
+The goal is not to build a perfect industrial knowledge graph. The goal is to demonstrate a practical GraphRAG pipeline with debugging tools, normalization, and explainable retrieval.
 
-This repository starts with a minimal, readable implementation rather than a full production GraphRAG system.
+## Why GraphRAG instead of plain RAG?
 
-The first milestone is to support:
+Plain RAG usually retrieves chunks directly from text.
 
-1. Loading a small set of GitHub issues and repository documents.
-2. Splitting content into TextUnits.
-3. Extracting entities and relationships with an LLM.
-4. Building a NetworkX-based knowledge graph.
-5. Running simple local graph search and global community search.
-6. Comparing GraphRAG retrieval against a naive chunk-search baseline.
+GraphRAG adds an intermediate structure:
 
-## Repository layout
+- entities: files, modules, APIs, features, algorithms, issues, tools
+- relationships: uses, depends_on, improves, conflicts_with, implements, proposes
+- communities: clusters of related technical topics
+- reports: summaries of each technical area
+
+This makes it easier to answer questions like:
+
+- What are the main contribution opportunities in this repo?
+- Why is graph-rag slow and which components are involved?
+- How can document retrieval be improved with hybrid retrieval?
+- What is the Kafka backend issue about?
+
+## Current features
+
+- GitHub issue ingestion
+- Text chunking into TextUnits
+- OpenAI-compatible LLM client, tested with OpenRouter
+- Robust JSON parsing for fenced LLM output
+- Retry logic for unstable LLM API calls
+- Entity and relationship extraction
+- Entity normalization, such as:
+  - `RRF` / `Reciprocal Rank Fusion`
+  - `Graph-RAG` / `graph_rag` / `Graph RAG`
+  - `TrustGraph` / `TG`
+- Graph-level normalization after graph construction
+- Community detection
+- Refined community reports focused on:
+  - technical theme
+  - key entities
+  - contribution opportunities
+  - evidence and uncertainty
+- Graph inspection script
+- Relation inspection script
+- Local GraphRAG retrieval
+- Global community-report retrieval
+- Naive lexical baseline
+- Grounded answer generation with `--answer`
+
+## Setup
+
+Create and activate a virtual environment:
+
+```bash
+python -m venv .venv
+source .venv/Scripts/activate
+```
+
+Install dependencies:
+
+```bash
+python -m pip install -e . --no-deps
+python -m pip install requests networkx pydantic python-dotenv rank-bm25 tqdm scikit-learn
+```
+
+Copy the environment file:
+
+```bash
+cp .env.example .env
+```
+
+Example `.env` for OpenRouter:
+
+```env
+LLM_PROVIDER=openai-compatible
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=your-api-key-here
+LLM_MODEL=your-model-name-here
+
+EMBEDDING_PROVIDER=mock
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+RAW_DATA_DIR=data/raw
+PROCESSED_DATA_DIR=data/processed
+```
+
+Do not commit `.env`.
+
+## Build an index
+
+Fetch issues:
+
+```bash
+python scripts/fetch_github_issues.py trustgraph-ai/trustgraph --state open --limit 20
+```
+
+Build the graph index:
+
+```bash
+python scripts/build_index.py trustgraph-ai__trustgraph_issues.json
+```
+
+Example successful output:
 
 ```text
-github-issue-graphrag/
-  data/
-    raw/                 # raw GitHub issue/doc exports, ignored by git
-    processed/           # generated indexes, ignored by git
-  examples/
-    sample_queries.md
-  scripts/
-    fetch_github_issues.py
-    build_index.py
-    query.py
-  src/
-    issue_graphrag/
-      ingest/            # GitHub/data loading
-      indexing/          # extraction, graph building, community reports
-      retrieval/         # naive/local/global query modes
-      storage/           # local JSON persistence
-      llm/               # LLM client abstraction
-  tests/
+Built index in data\processed
+{'nodes': 230, 'edges': 187, 'connected_components': 54}
 ```
+
+## Inspect graph quality
+
+Inspect the graph:
+
+```bash
+python scripts/inspect_graph.py --top-n 20
+```
+
+Inspect a specific entity:
+
+```bash
+python scripts/inspect_graph.py --entity "Graph RAG"
+python scripts/inspect_graph.py --entity "Hybrid Retrieval"
+python scripts/inspect_graph.py --entity "Kafka"
+```
+
+Inspect relation quality:
+
+```bash
+python scripts/inspect_relations.py --relation improves
+python scripts/inspect_relations.py --relation uses
+python scripts/inspect_relations.py --relation depends_on
+```
+
+These scripts are important because LLM-extracted graphs are noisy. The project explicitly treats graph construction as a debuggable pipeline, not as a perfect one-shot extraction.
+
+## Regenerate community reports
+
+If the graph already exists and only the community report prompt changed, regenerate reports without re-running extraction:
+
+```bash
+python scripts/regenerate_reports.py
+```
+
+This updates:
+
+```text
+data/processed/community_reports.json
+```
+
+without rebuilding the full graph.
 
 ## Query modes
 
-### Naive search
+### Local GraphRAG
 
-Uses text chunks directly as the retrieval unit. This is the baseline.
+Best for specific technical questions.
 
-```text
-query -> top-k TextUnits -> answer
+```bash
+python scripts/query.py "Why is graph-rag slow and which components are involved?" --mode local
 ```
 
-### Local graph search
+With grounded answer generation:
 
-Starts from matched entities, expands through graph neighbors, then uses related relationships and source TextUnits as context.
-
-```text
-query -> entities -> graph neighbors -> relationships + sources -> answer
+```bash
+python scripts/query.py "Why is graph-rag slow and which components are involved?" --mode local --answer
 ```
 
-### Global community search
+### Global GraphRAG
 
-Uses community reports to answer broad repository-level questions.
+Best for broad overview questions.
+
+```bash
+python scripts/query.py "What are the main technical contribution opportunities in this repo?" --mode global
+```
+
+With answer generation:
+
+```bash
+python scripts/query.py "What are the main technical contribution opportunities in this repo?" --mode global --answer
+```
+
+### Naive lexical baseline
+
+Useful as a comparison baseline.
+
+```bash
+python scripts/query.py "What is the Kafka backend issue about?" --mode naive
+```
+
+## Demo questions
+
+### 1. Graph-RAG latency
+
+```bash
+python scripts/query.py "Why is graph-rag slow and which components are involved?" --mode local --answer
+```
+
+Expected answer should mention:
+
+- `tg-invoke-graph-rag`
+- `graph_rag.Processor`
+- `Pulsar`
+- `TriplesClientSpec`
+- `triples-query-memgraph`
+- `Memgraph`
+- sequential Pulsar-mediated triples-query calls
+- possible fixes such as direct Bolt traversal or batched triples-query
+
+### 2. Hybrid retrieval
+
+```bash
+python scripts/query.py "How can TrustGraph improve document retrieval with hybrid retrieval?" --mode local --answer
+```
+
+Expected answer should mention:
+
+- Document-RAG currently relying on semantic/vector retrieval
+- BM25 or TF-IDF keyword retrieval
+- vector + keyword fusion
+- RRF
+- possible backends such as Elasticsearch, OpenSearch, or SQLite FTS5
+
+### 3. Kafka backend issue
+
+```bash
+python scripts/query.py "What is the Kafka backend issue about?" --mode local --answer
+```
+
+Expected answer should mention:
+
+- Issue #944
+- Kafka backend consumers hanging/blocking
+- `kafka_backend.py`
+- `Consumer` / `Producer`
+- `unsubscribe()` as a potential footgun
+- missing integration/e2e tests
+
+### 4. Contribution opportunities
+
+```bash
+python scripts/query.py "What are the main technical contribution opportunities in this repo?" --mode global --answer
+```
+
+Expected answer should mention areas such as:
+
+- Graph-RAG latency optimization
+- Hybrid retrieval
+- Cross-encoder reranking
+- Kafka backend reliability
+- Workspace export/import
+- config-as-code / configuration management
+- knowledge extraction documentation or testing
+- provider-specific RAG output parsing
+
+## Project structure
 
 ```text
-query -> community reports -> map key points -> reduce final answer
+src/issue_graphrag/
+  config.py
+  models.py
+  chunker.py
+  prompts.py
+  llm/
+    client.py
+    json_utils.py
+  indexing/
+    extractor.py
+    normalizer.py
+    graph_builder.py
+    graph_normalizer.py
+    community.py
+    report_generator.py
+  retrieval/
+    naive_search.py
+    local_search.py
+    global_search.py
+  storage/
+    json_store.py
+  ingest/
+    github_loader.py
+
+scripts/
+  fetch_github_issues.py
+  build_index.py
+  inspect_graph.py
+  inspect_relations.py
+  regenerate_reports.py
+  query.py
 ```
+
+## Known limitations
+
+This is an MVP prototype, not a production knowledge graph system.
+
+Known limitations:
+
+- LLM extraction may miss entities or extract overly generic ones.
+- Relationship direction can be noisy.
+  - Example: a relationship may say `Hybrid Retrieval improves RRF` even when the source text implies `RRF improves Hybrid Retrieval`.
+- Community reports depend on LLM summarization quality.
+- The graph uses lightweight local JSON storage.
+- There is no persistent LLM request cache yet.
+- Local retrieval uses query-term filtering rather than a learned reranker.
+- Generated answers should prefer source snippets over graph edge direction.
+
+These limitations are intentional parts of the project: the pipeline includes inspection and normalization tools to make graph quality debuggable.
+
+## What this demonstrates
+
+This project demonstrates:
+
+- How to design a GraphRAG indexing pipeline
+- How to connect a real LLM to structured extraction
+- How to normalize noisy LLM outputs
+- How to inspect and debug graph quality
+- How to compare GraphRAG retrieval with a naive lexical baseline
+- How to generate grounded answers from local and global graph context
 
 ## Status
 
-Work in progress. The current codebase is an initial skeleton for building the MVP.
+MVP complete.
 
-## Safety notes
+Next possible steps:
 
-Do not commit API keys, private issue exports, resumes, or personal data. Keep `.env` and generated data files local.
+- Add Streamlit UI
+- Add graph visualization with PyVis
+- Add persistent LLM cache
+- Add evaluation set for demo queries
+- Add relation direction cleanup
+- Add richer source citations in generated answers

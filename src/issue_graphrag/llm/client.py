@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Protocol
+
+import requests
 
 
 class LLMClient(Protocol):
@@ -30,31 +33,54 @@ class MockLLMClient:
 
 
 class OpenAICompatibleClient:
-    """Minimal OpenAI-compatible chat client.
+    """Minimal OpenAI-compatible chat client with retry support."""
 
-    This avoids locking the project to one model provider. It can be used with
-    OpenAI-compatible endpoints from different vendors.
-    """
-
-    def __init__(self, base_url: str, api_key: str, model: str):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: int = 120,
+        max_retries: int = 5,
+    ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self.timeout = timeout
+        self.max_retries = max_retries
 
     def complete(self, prompt: str) -> str:
-        import requests
-
         url = f"{self.base_url}/chat/completions"
-        response = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+
+        last_error: Exception | None = None
+
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                response = requests.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                        "Connection": "close",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0,
+                    },
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+
+            except requests.RequestException as exc:
+                last_error = exc
+                wait_seconds = min(2 ** attempt, 30)
+                print(
+                    f"[LLM retry] attempt {attempt}/{self.max_retries} failed: {exc}. "
+                    f"Retrying in {wait_seconds}s..."
+                )
+                time.sleep(wait_seconds)
+
+        raise RuntimeError(f"LLM request failed after {self.max_retries} retries") from last_error

@@ -14,3 +14,4 @@ tqdm>=4.66
 pytest>=8.0
 ruff>=0.5
 mypy>=1.8
+streamlit
