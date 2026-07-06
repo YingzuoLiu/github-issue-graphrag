@@ -50,6 +50,10 @@ This makes it easier to answer questions like:
 - How can document retrieval be improved with hybrid retrieval?
 - What is the Kafka backend issue about?
 
+## Demo UI
+
+![Streamlit demo](examples/demo_screenshot.png)
+
 ## Current features
 
 - GitHub issue ingestion
