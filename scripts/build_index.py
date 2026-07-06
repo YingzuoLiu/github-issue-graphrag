@@ -9,6 +9,7 @@ from issue_graphrag.indexing.community import attach_communities, community_subg
 from issue_graphrag.indexing.extractor import extract_all
 from issue_graphrag.indexing.graph_builder import build_graph, graph_stats
 from issue_graphrag.indexing.graph_normalizer import normalize_graph
+from issue_graphrag.indexing.normalizer import normalize_extraction
 from issue_graphrag.indexing.report_generator import generate_reports
 from issue_graphrag.llm.client import MockLLMClient, OpenAICompatibleClient
 from issue_graphrag.models import SourceDocument
@@ -42,7 +43,7 @@ def main() -> None:
     documents = [SourceDocument.model_validate(item) for item in raw_docs]
 
     text_units = documents_to_text_units(documents)
-    extraction = extract_all(text_units, llm)
+    extraction = normalize_extraction(extract_all(text_units, llm))
     graph = normalize_graph(build_graph(extraction.entities, extraction.relationships))
     assignments = detect_communities(graph)
     graph = attach_communities(graph, assignments)
