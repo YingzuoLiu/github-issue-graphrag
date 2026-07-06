@@ -8,6 +8,7 @@ from issue_graphrag.models import CommunityReport, TextUnit
 from issue_graphrag.retrieval.global_search import global_search
 from issue_graphrag.retrieval.local_search import local_search
 from issue_graphrag.retrieval.naive_search import naive_search
+from issue_graphrag.retrieval.router import route_query
 from issue_graphrag.storage.json_store import read_graph, read_json
 
 
@@ -67,21 +68,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Query the GitHub Issue GraphRAG index.")
     parser.add_argument("question")
     parser.add_argument("--mode", choices=["auto", "naive", "local", "global"], default="auto")
-    parser.add_argument("--answer", action="store_true", help="Generate a grounded LLM answer from retrieved context.")
-    parser.add_argument("--show-context", action="store_true", help="Print retrieved context even when --answer is used.")
+    parser.add_argument("--answer", action="store_true")
+    parser.add_argument("--show-context", action="store_true")
     args = parser.parse_args()
 
     graph, text_units, reports = load_processed_data()
 
-    mode = args.mode
-    if mode == "auto":
-        # Simple routing for the MVP:
-        # broad overview questions use global, specific technical questions use local.
-        lowered = args.question.lower()
-        if any(word in lowered for word in ["main", "overview", "themes", "opportunities", "summarize"]):
-            mode = "global"
-        else:
-            mode = "local"
+    mode = route_query(args.question, args.mode)
 
     print(f"Mode: {mode}\n")
 
