@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from issue_graphrag.llm.client import LLMClient
+from issue_graphrag.llm.json_utils import extract_json_object
 from issue_graphrag.models import CommunityReport, SearchResult
 from issue_graphrag.prompts import GLOBAL_MAP_PROMPT, GLOBAL_REDUCE_PROMPT
 
@@ -21,9 +22,11 @@ def global_map_reduce(query: str, reports: list[CommunityReport], llm: LLMClient
     if not selected_context:
         return "No community reports are available."
 
-    raw_points = llm.complete(GLOBAL_MAP_PROMPT.format(question=query, reports=selected_context))
+    raw_points = llm.complete(
+        GLOBAL_MAP_PROMPT.replace("{question}", query).replace("{reports}", selected_context)
+    )
     try:
-        points = json.loads(raw_points).get("points", [])
+        points = extract_json_object(raw_points).get("points", [])
     except json.JSONDecodeError:
         points = [{"description": raw_points, "score": 1}]
 
@@ -36,7 +39,9 @@ def global_map_reduce(query: str, reports: list[CommunityReport], llm: LLMClient
     if not point_text:
         point_text = selected_context
 
-    return llm.complete(GLOBAL_REDUCE_PROMPT.format(question=query, points=point_text))
+    return llm.complete(
+        GLOBAL_REDUCE_PROMPT.replace("{question}", query).replace("{points}", point_text)
+    )
 
 
 def global_search(reports: list[CommunityReport], query: str, top_k: int = 8) -> list[SearchResult]:

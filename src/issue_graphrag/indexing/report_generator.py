@@ -5,6 +5,7 @@ import json
 import networkx as nx
 
 from issue_graphrag.llm.client import LLMClient
+from issue_graphrag.llm.json_utils import extract_json_object
 from issue_graphrag.models import CommunityReport
 from issue_graphrag.prompts import COMMUNITY_REPORT_PROMPT
 
@@ -37,10 +38,10 @@ def _community_payload(graph: nx.Graph) -> str:
 
 def generate_report(community_id: int, graph: nx.Graph, llm: LLMClient) -> CommunityReport:
     payload = _community_payload(graph)
-    raw = llm.complete(COMMUNITY_REPORT_PROMPT.format(community_data=payload))
+    raw = llm.complete(COMMUNITY_REPORT_PROMPT.replace("{community_data}", payload))
 
     try:
-        parsed = json.loads(raw)
+        parsed = extract_json_object(raw)
     except json.JSONDecodeError:
         parsed = {
             "title": f"Community {community_id}",
