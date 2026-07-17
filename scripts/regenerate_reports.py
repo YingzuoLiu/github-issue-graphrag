@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 
-import networkx as nx
-
 from issue_graphrag.config import load_settings
 from issue_graphrag.indexing.report_generator import generate_reports
 from issue_graphrag.llm.client import MockLLMClient, OpenAICompatibleClient
