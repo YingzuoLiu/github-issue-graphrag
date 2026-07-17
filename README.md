@@ -375,6 +375,30 @@ For global retrieval, source recall covers documents attached to the selected to
 reports. Source MRR is intentionally left undefined because the source order inside one report is
 not a retrieval ranking.
 
+### Measured lexical/dense/fusion baseline
+
+The committed [Markdown report](eval/results.md) and [CSV details](eval/results.csv) capture a
+local CPU reference run over 12 annotated questions and the current 33-TextUnit demo snapshot.
+The run used `top_k=8`, three latency repetitions, `fusion_depth=20`, and the untuned
+`rrf_k=60` default.
+
+| mode | entity recall | source R@8 | source MRR | median query ms |
+|---|---:|---:|---:|---:|
+| BM25 (`naive`) | 0.847 | 0.944 | 0.861 | 0.17 |
+| Dense vector | 0.731 | 0.903 | 0.778 | 9.24 |
+| RRF hybrid | 0.847 | 0.944 | 0.882 | 12.18 |
+
+On this small corpus, hybrid retrieval preserved BM25's entity and source recall while improving
+source MRR from 0.861 to 0.882. The pure dense baseline did not outperform BM25, and both dense
+modes had higher warm-query latency. This is consistent with technical issue questions containing
+exact issue numbers, file names, configuration keys, and other identifiers that favor lexical
+matching.
+
+These results are a small reference experiment, not evidence of production-scale ANN performance
+or a strict asymptotic complexity improvement. Latency is hardware- and cache-dependent, and the
+12-question set is too small for broad statistical claims. Community metrics are `n/a` for these
+three modes because they rank TextUnits rather than community reports.
+
 ## Project structure
 
 ```text

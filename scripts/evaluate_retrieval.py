@@ -41,6 +41,8 @@ Evaluation note:
 - `vector` ranks TextUnits from the prebuilt embedded Qdrant collection.
 - `hybrid` fuses reusable BM25 and vector rankings with RRF; raw lexical and cosine scores are not
   mixed directly.
+- Community metrics are reported only for `local` and `global`, which return ranked community
+  reports. TextUnit modes report these metrics as `n/a`.
 - Reported query latency reuses initialized retrievers. One-time BM25 construction, embedding
   model loading, and Qdrant opening are reported separately as setup timings.
 """.strip()
