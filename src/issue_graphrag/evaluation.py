@@ -352,11 +352,15 @@ def evaluate_case(
         for source_id in case.expected_source_documents
         if source_id not in set(source_documents_for_recall)
     ]
-    community_recall, community_mrr = _community_metrics(
-        case.expected_community_entities,
-        trace.community_ids,
-        reports,
-    )
+    if mode in {"local", "global"}:
+        community_recall, community_mrr = _community_metrics(
+            case.expected_community_entities,
+            trace.community_ids,
+            reports,
+        )
+    else:
+        # TextUnit retrieval modes do not produce a ranked community list.
+        community_recall, community_mrr = None, None
 
     return EvalRow(
         query_id=case.id,

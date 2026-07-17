@@ -206,6 +206,30 @@ def test_evaluate_case_reports_entity_source_and_community_metrics(retrieval_dat
     assert row.missing_entities == ["Missing Entity"]
 
 
+@pytest.mark.parametrize("mode", ["naive", "vector", "hybrid"])
+def test_text_unit_modes_leave_community_metrics_undefined(retrieval_data, mode):
+    graph, units, reports = retrieval_data
+    case = EvalCase(
+        id="community-not-applicable",
+        category="global_theme",
+        question="What affects Kafka reliability?",
+        expected_community_entities=["Kafka", "Consumer"],
+    )
+
+    row = evaluate_case(
+        case,
+        mode,
+        graph,
+        units,
+        reports,
+        top_k=8,
+        retrieve=_fake_retrieve,
+    )
+
+    assert row.community_recall is None
+    assert row.community_mrr is None
+
+
 def test_category_routing_keeps_global_out_of_specific_queries():
     case = EvalCase(
         id="specific",

@@ -18,13 +18,11 @@ env/
 .env.*
 !.env.example
 
-# Generated data, indexes, and evaluation reports
+# Generated data and indexes
 data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
-eval/results.csv
-eval/results.md
 *.sqlite
 *.db
 *.parquet
