@@ -99,6 +99,12 @@ python -m pip install -e . --no-deps
 python -m pip install requests networkx pydantic python-dotenv rank-bm25 tqdm streamlit
 ```
 
+For the optional embedded vector index:
+
+```bash
+python -m pip install -e ".[embeddings,vector]"
+```
+
 Copy the environment file:
 
 ```bash
@@ -113,8 +119,11 @@ LLM_BASE_URL=https://openrouter.ai/api/v1
 LLM_API_KEY=your-api-key-here
 LLM_MODEL=your-model-name-here
 
-EMBEDDING_PROVIDER=mock
+EMBEDDING_PROVIDER=sentence-transformers
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+VECTOR_DB_PATH=data/processed/qdrant
+VECTOR_COLLECTION=issue_graphrag
 
 RAW_DATA_DIR=data/raw
 PROCESSED_DATA_DIR=data/processed
@@ -142,6 +151,21 @@ Example successful output:
 Built index in data\processed
 {'nodes': 230, 'edges': 187, 'connected_components': 54}
 ```
+
+Build the optional vector index after the graph index exists:
+
+```bash
+python scripts/build_vector_index.py --batch-size 32
+```
+
+This uses Qdrant client local mode and persists the collection under
+`data/processed/qdrant/`; it does not require a Qdrant server or Docker. The index stores
+TextUnits, entities, and community reports with stable UUIDv5 point IDs, so rebuilding the same
+logical records uses idempotent upserts.
+
+`sentence-transformers/all-MiniLM-L6-v2` is used as a lightweight English baseline because the
+demo corpus is made of English GitHub issues and the model is practical on a local CPU. It is a
+speed and reproducibility choice, not a claim that it is the best production embedding model.
 
 ## Inspect graph quality
 
@@ -314,18 +338,22 @@ src/issue_graphrag/
     graph_normalizer.py
     community.py
     report_generator.py
+    vector_documents.py
   retrieval/
     naive_search.py
     local_search.py
     global_search.py
   storage/
     json_store.py
+    vector_store.py
+    qdrant_store.py
   ingest/
     github_loader.py
 
 scripts/
   fetch_github_issues.py
   build_index.py
+  build_vector_index.py
   inspect_graph.py
   inspect_relations.py
   regenerate_reports.py

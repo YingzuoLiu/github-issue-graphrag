@@ -8,6 +8,7 @@ tqdm>=4.66
 
 # Optional local embeddings
 # sentence-transformers>=2.7
+# qdrant-client>=1.14,<2
 
 # Dev
 pytest>=8.0
