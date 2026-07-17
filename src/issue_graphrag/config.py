@@ -17,6 +17,8 @@ class Settings:
     embedding_model: str
     raw_data_dir: Path
     processed_data_dir: Path
+    vector_db_path: Path
+    vector_collection: str
     github_token: str | None
 
 
@@ -35,5 +37,7 @@ def load_settings(env_file: str | None = None) -> Settings:
         embedding_model=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
         raw_data_dir=Path(os.getenv("RAW_DATA_DIR", "data/raw")),
         processed_data_dir=Path(os.getenv("PROCESSED_DATA_DIR", "data/processed")),
+        vector_db_path=Path(os.getenv("VECTOR_DB_PATH", "data/processed/qdrant")),
+        vector_collection=os.getenv("VECTOR_COLLECTION", "issue_graphrag"),
         github_token=os.getenv("GITHUB_TOKEN") or None,
     )
