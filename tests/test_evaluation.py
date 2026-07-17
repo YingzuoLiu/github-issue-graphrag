@@ -68,7 +68,7 @@ def retrieval_data():
 
 
 def _fake_retrieve(mode, _question, _graph, _units, _reports, _top_k):
-    if mode == "naive":
+    if mode in {"naive", "vector", "hybrid"}:
         return [
             SearchResult(id="unit-vector", score=2.0, text="[unit-vector] Hybrid retrieval"),
             SearchResult(id="unit-kafka", score=1.0, text="[unit-kafka] Kafka Consumer"),
@@ -143,6 +143,8 @@ def test_rank_metrics_handle_multiple_relevant_documents():
     ("mode", "expected_sources", "expected_communities"),
     [
         ("naive", ["repo#issue-875", "repo#issue-944"], []),
+        ("vector", ["repo#issue-875", "repo#issue-944"], []),
+        ("hybrid", ["repo#issue-875", "repo#issue-944"], []),
         ("local", ["repo#issue-944"], ["community-kafka"]),
         (
             "global",
@@ -221,6 +223,11 @@ def test_category_routing_keeps_global_out_of_specific_queries():
         "local",
         "global",
     ]
+    assert modes_for_case(
+        case,
+        ["naive", "vector", "hybrid", "local", "global"],
+        False,
+    ) == ["naive", "vector", "hybrid", "local"]
 
 
 def test_summary_averages_available_metrics_only(retrieval_data):
