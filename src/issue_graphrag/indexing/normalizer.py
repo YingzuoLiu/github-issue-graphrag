@@ -19,7 +19,6 @@ ENTITY_ALIASES = {
     "graphrag": "Graph RAG",
     "document.rag": "Document RAG",
     "document_rag.py": "document_rag.py",
-    "document-rag": "Document RAG",
     "trustgraph 2.3.21": "TrustGraph",
     "trustgraph community": "TrustGraph",
     "document-rag": "Document RAG",
