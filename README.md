@@ -296,6 +296,35 @@ Expected answer should mention areas such as:
 - knowledge extraction documentation or testing
 - provider-specific RAG output parsing
 
+## Retrieval evaluation
+
+The repository includes a manually annotated retrieval set covering exact issue lookup,
+local relationship questions, and broad repository themes. Each case records expected entities
+and source issue document IDs; global-theme cases also record entities expected in selected
+community reports.
+
+Run the current BM25, local GraphRAG, and global community-report baselines with:
+
+```bash
+python scripts/evaluate_retrieval.py --top-k 8 --repeats 3
+```
+
+The script writes detailed CSV and Markdown reports under `eval/` and reports:
+
+- entity coverage in retrieved context
+- source-document Recall@K and reciprocal rank
+- community entity coverage and reciprocal rank for global questions
+- a context-noise proxy based on unexpected graph entities
+- median end-to-end retrieval latency
+
+The current BM25 latency includes corpus tokenization and index construction on every query.
+Later vector and hybrid experiments will report index-build, warm-query, and cold end-to-end
+latency separately so the comparison remains explicit.
+
+For global retrieval, source recall covers documents attached to the selected top-k community
+reports. Source MRR is intentionally left undefined because the source order inside one report is
+not a retrieval ranking.
+
 ## Project structure
 
 ```text
@@ -373,6 +402,5 @@ The MVP is complete. Possible extensions include:
 - **Graph visualization**: add a PyVis or NetworkX-based view for inspecting entity communities and high-degree nodes.
 - **Persistent LLM cache**: cache extraction and report-generation calls to reduce cost and make rebuilds resumable.
 - **Relation direction cleanup**: add validation rules for direction-sensitive relationships such as `improves`, `depends_on`, and `uses`.
-- **Evaluation set**: add a small `examples/eval_queries.json` with expected entities, sources, and answer criteria for demo queries.
 - **Richer source citation formatting**: improve generated answers so they cite issue numbers and source snippets more consistently.
 - **Optional deployment**: package a Streamlit Cloud demo with sample data and secrets management.
