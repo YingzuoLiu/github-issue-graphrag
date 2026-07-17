@@ -80,6 +80,8 @@ The Streamlit demo provides a small interface for selecting retrieval mode, runn
 - Local GraphRAG retrieval
 - Global community-report retrieval
 - BM25 lexical baseline
+- Optional dense TextUnit retrieval with embedded Qdrant
+- Offline BM25 / vector / RRF hybrid comparison harness
 - Grounded answer generation with `--answer`
 - Streamlit demo app
 
@@ -166,6 +168,7 @@ logical records uses idempotent upserts.
 `sentence-transformers/all-MiniLM-L6-v2` is used as a lightweight English baseline because the
 demo corpus is made of English GitHub issues and the model is practical on a local CPU. It is a
 speed and reproducibility choice, not a claim that it is the best production embedding model.
+The build command reports model-loading, document-loading, and embedding/upsert time separately.
 
 ## Inspect graph quality
 
@@ -333,17 +336,40 @@ Run the current BM25, local GraphRAG, and global community-report baselines with
 python scripts/evaluate_retrieval.py --top-k 8 --repeats 3
 ```
 
+After building the optional vector index, run the isolated lexical/dense/fusion experiment with:
+
+```bash
+python scripts/evaluate_retrieval.py \
+  --modes naive vector hybrid \
+  --top-k 8 \
+  --repeats 3 \
+  --fusion-depth 20 \
+  --rrf-k 60
+```
+
+These experiment-only modes are deliberately not added to `scripts/query.py`, the Streamlit mode
+selector, or the Local/Global GraphRAG paths. `BM25Retriever` builds its tokenized corpus once per
+evaluation run. Vector retrieval embeds each query and ranks pre-indexed TextUnits from Qdrant.
+Hybrid retrieval uses Reciprocal Rank Fusion instead of combining incomparable BM25 and cosine
+scores directly.
+
+`rrf_k=60` is a named, conventional default and has not been tuned on this small evaluation set.
+The candidate depth is also explicit so it can be varied without silently changing the fusion
+behavior.
+
 The script writes detailed CSV and Markdown reports under `eval/` and reports:
 
 - entity coverage in retrieved context
 - source-document Recall@K and reciprocal rank
 - community entity coverage and reciprocal rank for global questions
 - a context-noise proxy based on unexpected graph entities
-- median end-to-end retrieval latency
+- median warm-query retrieval latency
+- one-time BM25 construction, embedding-model loading, and Qdrant opening time
 
-The current BM25 latency includes corpus tokenization and index construction on every query.
-Later vector and hybrid experiments will report index-build, warm-query, and cold end-to-end
-latency separately so the comparison remains explicit.
+The vector-index build command reports embedding and upsert time separately from query evaluation.
+The embedded Qdrant results are a reproducible local baseline, not a claim about distributed or
+production-scale ANN performance. The project reports measured timings rather than asserting a
+strict asymptotic complexity improvement.
 
 For global retrieval, source recall covers documents attached to the selected top-k community
 reports. Source MRR is intentionally left undefined because the source order inside one report is
@@ -370,6 +396,8 @@ src/issue_graphrag/
     vector_documents.py
   retrieval/
     naive_search.py
+    vector_search.py
+    hybrid_search.py
     local_search.py
     global_search.py
   storage/

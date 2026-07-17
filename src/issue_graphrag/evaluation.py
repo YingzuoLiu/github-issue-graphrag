@@ -17,10 +17,12 @@ from issue_graphrag.retrieval.naive_search import naive_search
 
 
 DEFAULT_MODES = ["naive", "local", "global"]
+EXPERIMENT_MODES = ["vector", "hybrid"]
+AVAILABLE_MODES = [*DEFAULT_MODES, *EXPERIMENT_MODES]
 CATEGORY_DEFAULT_MODES = {
-    "single_lookup": ["naive", "local"],
-    "local_relationship": ["naive", "local"],
-    "global_theme": ["naive", "local", "global"],
+    "single_lookup": ["naive", "vector", "hybrid", "local"],
+    "local_relationship": ["naive", "vector", "hybrid", "local"],
+    "global_theme": ["naive", "vector", "hybrid", "local", "global"],
 }
 
 
@@ -108,7 +110,10 @@ def modes_for_case(
 ) -> list[str]:
     if all_modes:
         return requested_modes
-    category_modes = CATEGORY_DEFAULT_MODES.get(case.category, ["naive", "local"])
+    category_modes = CATEGORY_DEFAULT_MODES.get(
+        case.category,
+        ["naive", "vector", "hybrid", "local"],
+    )
     return [mode for mode in requested_modes if mode in category_modes]
 
 
@@ -151,7 +156,7 @@ def _unique(values: Iterable[str]) -> list[str]:
 
 
 def _source_unit_ids(mode: str, results: list[SearchResult], context: str) -> list[str]:
-    if mode == "naive":
+    if mode in {"naive", "vector", "hybrid"}:
         return [result.id for result in results]
     if mode == "local":
         sources = _section(context, "-----Sources-----")
