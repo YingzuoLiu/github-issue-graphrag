@@ -42,6 +42,12 @@ where = ["src"]
 line-length = 100
 src = ["src", "tests"]
 
+[tool.ruff.lint]
+# Pinned explicitly. The dev extra tracks an unpinned ruff, and relying on the
+# linter's implicit defaults means CI quietly changes meaning whenever ruff
+# expands its default rule set.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

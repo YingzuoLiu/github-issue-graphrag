@@ -1,0 +1,35 @@
+{
+  "headers": {
+    "X-GitHub-Delivery": "d-0006",
+    "X-GitHub-Event": "issues"
+  },
+  "received_at": "2024-05-06T15:05:00Z",
+  "payload": {
+    "action": "closed",
+    "issue": {
+      "number": 944,
+      "title": "Kafka backend consumers hang on unsubscribe",
+      "body": "kafka_backend.py blocks forever when a Consumer is torn down. unsubscribe() appears to be the footgun: it is called while the poll loop still holds the partition assignment.",
+      "state": "closed",
+      "labels": [
+        {
+          "name": "bug"
+        },
+        {
+          "name": "help wanted"
+        }
+      ],
+      "user": {
+        "login": "contributor-c"
+      },
+      "html_url": "https://github.com/trustgraph-ai/trustgraph/issues/944",
+      "created_at": "2024-04-28T08:15:00Z",
+      "updated_at": "2024-05-06T15:05:00Z",
+      "closed_at": "2024-05-06T15:05:00Z"
+    },
+    "repository": {
+      "full_name": "trustgraph-ai/trustgraph"
+    }
+  },
+  "note": "#944 closes, which should unblock #901 and change the ranking."
+}

@@ -1,0 +1,85 @@
+{
+  "note": "Hand-authored substring rules, NOT recorded LLM output. They stand in for the extraction step so the incremental pipeline, its provenance and its invalidation behaviour can be replayed deterministically without an API key. Swap FixtureExtractor for LLMExtractor to use a real model.",
+  "rules": [
+    {
+      "match": "kafka_backend.py",
+      "entities": [
+        {"name": "kafka_backend.py", "type": "FILE", "description": "Kafka transport backend module"},
+        {"name": "Kafka", "type": "TOOL", "description": "Message broker used by the transport backend"},
+        {"name": "unsubscribe()", "type": "API", "description": "Consumer teardown call implicated in the hang"}
+      ],
+      "relationships": [
+        {"source": "#944", "target": "kafka_backend.py", "relation": "mentions", "description": "Issue #944 reports the hang inside kafka_backend.py"},
+        {"source": "#944", "target": "unsubscribe()", "relation": "mentions", "description": "unsubscribe() is named as the likely footgun"},
+        {"source": "kafka_backend.py", "target": "Kafka", "relation": "uses", "description": "The backend wraps the Kafka Consumer and Producer"}
+      ]
+    },
+    {
+      "match": "triples-query",
+      "entities": [
+        {"name": "Graph RAG", "type": "FEATURE", "description": "Graph-backed retrieval path"},
+        {"name": "Pulsar", "type": "TOOL", "description": "Message bus mediating triples-query calls"},
+        {"name": "Memgraph", "type": "TOOL", "description": "Graph store answering triples queries"}
+      ],
+      "relationships": [
+        {"source": "#922", "target": "Graph RAG", "relation": "mentions", "description": "Issue #922 is about Graph RAG latency"},
+        {"source": "Graph RAG", "target": "Pulsar", "relation": "depends_on", "description": "Each hop is mediated by Pulsar"},
+        {"source": "Pulsar", "target": "Memgraph", "relation": "communicates_with", "description": "Every triples-query round-trips to Memgraph"}
+      ]
+    },
+    {
+      "match": "direct Bolt traversal",
+      "entities": [
+        {"name": "Bolt Traversal", "type": "APPROACH", "description": "Traverse Memgraph directly over Bolt instead of per-hop messaging"}
+      ],
+      "relationships": [
+        {"source": "#922", "target": "Bolt Traversal", "relation": "proposes", "description": "Comment proposes a direct Bolt traversal"},
+        {"source": "Bolt Traversal", "target": "Pulsar", "relation": "supersedes", "description": "A direct traversal would remove the Pulsar hop entirely"}
+      ]
+    },
+    {
+      "match": "RRF",
+      "entities": [
+        {"name": "Hybrid Retrieval", "type": "APPROACH", "description": "Fusion of lexical and dense retrieval"},
+        {"name": "BM25", "type": "ALGORITHM", "description": "Lexical ranking function"},
+        {"name": "RRF", "type": "ALGORITHM", "description": "Reciprocal Rank Fusion"}
+      ],
+      "relationships": [
+        {"source": "#875", "target": "Hybrid Retrieval", "relation": "proposes", "description": "Issue #875 proposes hybrid retrieval for Document RAG"},
+        {"source": "RRF", "target": "Hybrid Retrieval", "relation": "improves", "description": "RRF fuses ranked lists without mixing incomparable scores"},
+        {"source": "Hybrid Retrieval", "target": "BM25", "relation": "combines", "description": "Hybrid retrieval combines BM25 with dense retrieval"}
+      ]
+    },
+    {
+      "match": "Elasticsearch",
+      "entities": [
+        {"name": "Elasticsearch", "type": "TOOL", "description": "Candidate lexical backend for BM25"}
+      ],
+      "relationships": [
+        {"source": "#875", "target": "Elasticsearch", "relation": "proposes", "description": "Comment proposes Elasticsearch as the BM25 backend"},
+        {"source": "Elasticsearch", "target": "BM25", "relation": "implements", "description": "Elasticsearch ships a BM25 similarity"}
+      ]
+    },
+    {
+      "match": "integration tests",
+      "entities": [
+        {"name": "Integration Testing", "type": "PRACTICE", "description": "End-to-end coverage of the transport backends"}
+      ],
+      "relationships": [
+        {"source": "#901", "target": "Integration Testing", "relation": "proposes", "description": "Issue #901 asks for end-to-end coverage"},
+        {"source": "Integration Testing", "target": "Kafka", "relation": "affects", "description": "The suite exercises Kafka consumer teardown"}
+      ]
+    },
+    {
+      "match": "poll loop no longer holds",
+      "entities": [
+        {"name": "Consumer Teardown", "type": "APPROACH", "description": "Drain the poll loop before releasing the partition assignment"}
+      ],
+      "relationships": [
+        {"source": "#950", "target": "Consumer Teardown", "relation": "implements", "description": "PR #950 drains the poll loop before unsubscribing"},
+        {"source": "Consumer Teardown", "target": "unsubscribe()", "relation": "affects", "description": "Teardown ordering is what makes unsubscribe() safe"},
+        {"source": "#950", "target": "#944", "relation": "closes", "description": "Deliberate ontology violation: an inferred fact may not assert a GitHub predicate"}
+      ]
+    }
+  ]
+}

@@ -1,12 +1,21 @@
 # GitHub Issue GraphRAG
 
-A lightweight GraphRAG prototype for analyzing GitHub issues, extracting technical entities and relationships, building a repository knowledge graph, and answering contribution-oriented questions with grounded context.
+An event-driven repository intelligence graph that connects issues, discussions, pull requests
+and code modules to explain what changed, why it matters, and where contributors can act next.
 
-The project uses TrustGraph issues as the demo dataset, but the pipeline is designed to work with any GitHub repository issue set.
+The project has two halves:
+
+- **Batch GraphRAG index (v0.1, complete).** Turns a snapshot of GitHub issues into an entity
+  graph with community reports, and answers contribution-oriented questions with grounded context.
+- **Live contribution graph (v0.2).** Replays GitHub events into a versioned, ontology-checked
+  fact store, so the graph updates incrementally and can say how each event moved the
+  recommendations. See [Live contribution graph](#live-contribution-graph-v02).
+
+The demo dataset is TrustGraph, but both halves work against any GitHub repository.
 
 ## What this project does
 
-This project turns GitHub issues into a small repository knowledge graph:
+The batch pipeline turns GitHub issues into a small repository knowledge graph:
 
 ```text
 GitHub issues
@@ -28,6 +37,28 @@ Community report generation
 Local / global / BM25 retrieval
   ↓
 Grounded answer generation
+```
+
+The live pipeline keeps that graph current as the repository moves:
+
+```text
+GitHub webhook delivery
+  ↓
+signature + delivery-id checks        (deterministic)
+  ↓
+record update: issue / PR / comment   (deterministic)
+  ↓
+GitHub-stated facts, repo-wide        (deterministic)
+  ↓
+scoped LLM extraction, changed docs only
+  ↓
+ontology validation
+  ↓
+fact upsert / invalidate with validity windows
+  ↓
+graph projection + contribution ranking
+  ↓
+"what changed, and why it matters"
 ```
 
 The goal is not to build a perfect industrial knowledge graph. The goal is to demonstrate a practical GraphRAG pipeline with debugging tools, normalization, and explainable retrieval.
@@ -84,6 +115,21 @@ The Streamlit demo provides a small interface for selecting retrieval mode, runn
 - Offline BM25 / vector / RRF hybrid comparison harness
 - Grounded answer generation with `--answer`
 - Streamlit demo app
+
+Live contribution graph (v0.2):
+
+- GitHub webhook signature verification and delivery-id deduplication
+- Issue, pull request and comment ingestion, including changed files
+- Immutable fact versions with `valid_from` / `valid_to`, so history stays queryable and
+  historical projections never borrow later knowledge
+- Source-clock versioning of records: stale payloads, partial payloads and out-of-order
+  deliveries all converge
+- An explicit ontology separating who may assert a predicate from whether the assertion is legal
+- Incremental indexing that re-extracts only the documents whose text changed
+- Rebuild consistency check over a fingerprint that includes direction and provenance
+- Deterministic contribution scoring with per-signal reasons and source links
+- Deterministic event replay from fixtures
+- Timeline view of the affected subgraph in the Streamlit app
 
 ## Setup
 
@@ -212,13 +258,287 @@ data/processed/community_reports.json
 
 without rebuilding the full graph.
 
+## Live contribution graph (v0.2)
+
+The batch index answers "what is in this repository". It cannot answer the question a
+contributor actually has the next morning:
+
+> The opportunity I saw yesterday — has someone opened a PR for it? Did a new comment reveal a
+> blocker? Has the approach I was going to take already been superseded?
+
+v0.2 answers that by replaying GitHub events into a versioned fact store. The differentiator is
+not that there is a picture of a graph on the page. It is that **the graph updates incrementally
+when the repository changes, and explains how those changes move the contribution opportunities.**
+
+![Live contribution graph](examples/live_contribution_graph.png)
+
+### The design rule
+
+Expensive work is scoped. Cheap work is not.
+
+- **Scoped:** LLM extraction runs only for documents whose text actually changed, and community
+  reports regenerate only for communities whose membership changed. These are the calls that cost
+  money and latency.
+- **Not scoped:** GitHub-stated facts are re-derived for every document on every event, and the
+  graph is folded fresh from the fact set. Both are pure string and dictionary work measured in
+  microseconds.
+
+Re-deriving the cheap layer removes an entire class of ordering bugs — an issue that mentions
+`#950` only gains that edge once the index has seen PR #950 — and it is why an incremental replay
+and a full rebuild land on the same graph *by construction* rather than by luck.
+
+### Two clocks
+
+Deriving the graph in a fixed order is not enough on its own, because the *records* the graph is
+derived from can also be overwritten out of order. So the index keeps two clocks apart:
+
+| Clock | What it is | What it decides |
+|---|---|---|
+| `effective_at` | the newest timestamp GitHub reports for a record | which payload wins; an older payload can never overwrite newer state, whenever it arrives |
+| `indexed_at` | logical ingestion order, forced strictly monotonic at one-second precision | when a fact's validity window opens |
+
+Every present field carries its own `(effective_at, delivery_id)` source version. Ties resolve the
+same way in either arrival order without letting one partial payload hide fields that only another
+webhook shape carries. Deleted comments leave a versioned tombstone: a late `created` cannot
+resurrect a deletion, while an old delayed `deleted` event cannot erase a newer edit. The result is
+that applying a set of deliveries in *any* order converges on the same records and the same graph —
+which is a test, not a hope (`test_out_of_order_deliveries_converge_on_the_same_graph`).
+
+A partial payload is merged field by field rather than rebuilt wholesale. This matters more than it
+sounds: GitHub delivers pull request comments under the `issue` key, with no `merged`, `merged_at`
+or `draft` fields at all. Rebuilding the record from that payload silently demotes a merged pull
+request to a plain closed one, and the issue it closed stops looking claimed.
+
+### Deterministic vs inferred
+
+The split is enforced by an explicit ontology (`src/issue_graphrag/live/ontology.py`), not by
+convention. There are two separate guard rails, and conflating them leaves a hole:
+
+- **Origin** decides *who may assert* a predicate. An inferred fact claiming `closes` is rejected
+  outright and the rejection is reported. This rule is time-invariant, so it is enforced when the
+  fact is written.
+- **Domain and range** decide whether an assertion is *legal at all*, and they apply to every fact
+  regardless of origin — a regex is perfectly capable of producing `Issue #1 closes Issue #2` from
+  an issue body that says "fixes #2". This rule depends on node types, which are knowledge the
+  index acquires over time, so it is enforced at projection time where it stays a pure function of
+  the current fact set. The deterministic path is also fixed at the source: a closing keyword only
+  means `closes` when a pull request is the one saying it.
+
+| Deterministic (GitHub payload only) | Inferred (LLM, then schema-checked) |
+|---|---|
+| webhook signature and delivery-id dedup | technical entities in new comments |
+| issue / PR state, labels, timestamps | whether two discussions are semantically related |
+| explicit `#123` references, `closes`, `blocked by` | `proposes` / `supersedes` / `conflicts_with` |
+| files a PR touches, module a file belongs to | what a change means for the surrounding area |
+| fact upsert, invalidation, replay, event log | narrative summaries in community reports |
+| affected-document selection | — |
+| contribution scoring and its reasons | — |
+| source links and validity windows | — |
+
+The schema is small on purpose:
+
+- **Node types:** `ISSUE`, `PULL_REQUEST`, `FILE`, `MODULE`, plus open concept types.
+- **GitHub predicates:** `has_state`, `has_label`, `references`, `closes`, `blocked_by`,
+  `touches`, `belongs_to`.
+- **Inferred predicates:** `implements`, `conflicts_with`, `supersedes`, `proposes`, `improves`,
+  `depends_on`, `uses`, `affects`, and friends. Anything outside the vocabulary folds into
+  `related_to` rather than growing it.
+
+Inspect it with `python scripts/replay_events.py --show-ontology`.
+
+### Facts are immutable versions
+
+A fact is written once and then only ever closed. Three outcomes, and no fourth:
+
+| Situation | What happens |
+|---|---|
+| a new assertion | append an open version |
+| the assertion no longer holds | close it with `valid_to` |
+| the assertion holds but its evidence moved | close the old version, append a new one |
+| the assertion is re-derived unchanged | **nothing at all** |
+
+That last row is the one that makes time travel trustworthy. If re-observing a fact updated it in
+place, an unrelated event on the other side of the repository would make every fact look freshly
+confirmed, and reading the graph at an earlier moment would surface evidence that was edited into
+existence later. Counting observations is a separate concern; it must not touch the assertion.
+
+Each version carries `valid_from`, `valid_to`, its origin, the delivery that asserted it, the
+delivery that closed it, and evidence pointing at the issue body, comment or pull request behind
+it. The current graph is the projection of versions with an open window; any earlier graph is the
+same projection at an earlier moment.
+
+**A historical projection reads nothing but facts.** Both pieces of knowledge that grow over time —
+that `#950` turned out to be a pull request, and which chunk of text a fact was grounded in — are
+resolved from the facts valid at the moment being projected, never from current records. Otherwise
+querying "what did we know last Tuesday" would answer with today's knowledge.
+
+### Run the demo
+
+The shipped fixtures replay a small story: a comment proposes a new approach, a pull request picks
+up an issue, a drive-by suggestion is added and then deleted, the pull request merges, the issue
+closes, and GitHub redelivers an event it already sent.
+
+```bash
+python scripts/replay_events.py --verify-rebuild
+```
+
+`--verify-rebuild` re-derives the whole deterministic layer from the records and replays the
+*recorded* extraction output, then compares graph fingerprints. That makes it a statement about
+this pipeline — the fact lifecycle, the deterministic derivation and the projection must reach the
+same graph whether they got there in six steps or one — rather than a statement about the model.
+`--re-extract` additionally re-runs extraction; with the fixture extractor that is a useful
+stability check, but against a live model it measures the model's repeatability, so it is reported
+separately and never as a consistency guarantee. Making a live model reproducible here would mean
+caching extraction output keyed by document signature, model id and prompt version; that is listed
+under future work, not claimed.
+
+The fingerprint includes edge direction, per-relation origin and evidence. An earlier version
+compared only undirected relation labels, which meant a reversed `closes` edge or a fact that had
+lost its provenance could still report a clean PASS.
+
+```text
+Bootstrapped trustgraph-ai/trustgraph: 4 items, 14 nodes, 12 edges
+
+[d-0004] issue_comment.deleted @ 2024-05-05T12:00:00Z
+--------------------------------------------------
+  affected documents : trustgraph-ai/trustgraph#issue-875
+  re-extracted       : trustgraph-ai/trustgraph#issue-875
+  invalidated  [llm] Elasticsearch --is_a--> TOOL
+  invalidated  [llm] Elasticsearch --implements--> BM25
+  invalidated  [llm] Issue #875 --proposes--> Elasticsearch
+  recommendation score_changed: Issue #875 available/2.15 -> available/1.95
+      because no longer: 2 linked technical concepts: Elasticsearch, Hybrid Retrieval (+0.40)
+
+Replayed 7 deliveries (6 applied, 1 skipped): 20 nodes, 21 edges, 68 facts (9 closed)
+Rebuild consistency (recorded extraction, deterministic layer rebuilt): PASS
+```
+
+Then query it:
+
+```bash
+# what to work on now, and why each item scores what it does
+python scripts/contribution_report.py
+
+# the same question, as the graph stood mid-replay
+python scripts/contribution_report.py --as-of 2024-05-04T12:00:00Z
+
+# one node with the evidence behind every edge
+python scripts/contribution_report.py --explain "Issue #944"
+
+# every fact ever asserted about a node, including retired ones
+python scripts/contribution_report.py --history Elasticsearch
+```
+
+To run it against a real repository instead of the fixtures:
+
+```bash
+python scripts/fetch_live_seed.py trustgraph-ai/trustgraph --state all --limit 30
+python scripts/replay_events.py   --seed data/raw/trustgraph-ai__trustgraph_live_seed.json   --events path/to/captured/events   --llm
+```
+
+`fetch_live_seed.py` keeps pull requests, comments and changed files, which
+`fetch_github_issues.py` deliberately drops. `--llm` swaps the offline fixture extractor for the
+configured provider.
+
+### The five properties this has to satisfy
+
+Each one is a test, not a claim (`tests/test_live_indexer.py`):
+
+| Property | Test |
+|---|---|
+| Replaying one delivery twice moves the graph once | `test_redelivering_the_same_event_changes_the_graph_only_once` |
+| A deleted or edited comment retires its inferences, history stays queryable | `test_comment_deletion_invalidates_inferred_facts_but_keeps_history` |
+| Merging a PR or closing an issue actually changes the recommendations | `test_merged_pull_request_and_closed_issue_change_recommendations` |
+| Incremental replay equals a full rebuild | `test_incremental_replay_matches_a_full_rebuild` |
+| Every inferred relation traces to a specific issue, comment or PR | `test_every_inferred_fact_is_traceable_to_a_source` |
+
+Being replayable and convergent needs more than that, so `tests/test_live_temporal.py` pins the
+properties that make the word "temporal" honest:
+
+| Property | Test |
+|---|---|
+| A past moment does not know what the index learned later | `test_a_past_moment_does_not_know_that_a_number_became_a_pull_request` |
+| A past moment does not cite text written later | `test_a_past_moment_does_not_cite_text_written_later` |
+| Changed evidence appends a version instead of editing one | `test_changed_evidence_appends_a_version_instead_of_editing_one` |
+| An unrelated event does not touch a fact | `test_an_unchanged_fact_is_not_touched_by_an_unrelated_event` |
+| Deliveries in any order converge on the same graph | `test_out_of_order_deliveries_converge_on_the_same_graph` |
+| A stale payload cannot rewind state | `test_a_stale_payload_cannot_rewind_state` |
+| A comment on a merged pull request keeps it merged | `test_a_comment_on_a_merged_pull_request_keeps_it_merged` |
+| A deleted comment is not resurrected by a late create | `test_a_deleted_comment_is_not_resurrected_by_a_late_create` |
+| A stale delete cannot erase a newer comment edit | `test_a_stale_delete_cannot_remove_a_newer_comment_edit` |
+| A deletion wins an equal-timestamp edit tie in either order | `test_comment_delete_wins_same_timestamp_tie_in_either_order` |
+| Same-timestamp partial PR payloads converge in either order | `test_same_timestamp_partial_pr_payloads_converge_in_either_order` |
+| Same-second events keep distinct history windows | `test_events_received_in_the_same_second_get_distinct_history_windows` |
+| The fingerprint can actually fail, on direction and on evidence | `test_signature_distinguishes_edge_direction`, `test_signature_distinguishes_evidence` |
+| Same-named files in different directories stay separate | `test_same_named_files_in_different_directories_stay_separate` |
+| A closing keyword in an issue is a reference, not a close | `test_a_closing_keyword_in_an_issue_is_a_reference_not_a_close` |
+
+```bash
+python -m pytest tests/test_live_indexer.py tests/test_live_temporal.py -v
+python scripts/replay_events.py --verify-rebuild   # the same rebuild check from the CLI
+```
+
+### Contribution scoring
+
+The ranking is a small auditable formula over the projected graph, with no model in the loop, so
+every change can be explained:
+
+| Signal | Effect |
+|---|---|
+| open issue | +1.00 |
+| `good first issue` / `help wanted` / `documentation` | +0.75 |
+| linked technical concepts | +0.20 each, capped at 5 |
+| an open or merged pull request closes or references it | −2.00, status `claimed` |
+| blocked by an issue that is still open | −1.50, status `blocked` |
+| issue is closed | drops out of the ranking |
+
+### Wiring a real webhook
+
+`src/issue_graphrag/live/webhook.py` is framework-agnostic. An HTTP handler passes the raw request
+headers and the exact raw body so the signature stays verifiable:
+
+```python
+from issue_graphrag.live.webhook import parse_webhook
+from issue_graphrag.live.indexer import apply_event
+
+event = parse_webhook(request.headers, request.body, secret=WEBHOOK_SECRET)
+delta = apply_event(state, event, extractor)
+```
+
+`apply_event` is idempotent on delivery id, so GitHub redeliveries are safe. Pull request file
+lists are not in the hook payload; fetch them from the REST API and pass them as
+`attachments={"files": [...]}`, the way the fixtures do.
+
+### What v0.2 deliberately does not do
+
+- No HTTP server is included. The signature check, normalization and indexing are, so mounting
+  them behind a route is the remaining step.
+- Storage is still local JSON. The fact model is designed so a graph database can replace the
+  projection later, but swapping in Neo4j now would add operational weight without answering a
+  new question.
+- The shipped `fixtures/live_demo/extraction_rules.json` contains hand-authored substring rules,
+  **not recorded model output**. They exist so the incremental behaviour, provenance and
+  invalidation can be replayed deterministically without an API key. Use `--llm` for real
+  extraction.
+- Contribution scoring only ranks issues. A pull request that needs review is arguably an
+  opportunity too, and is not modelled yet.
+- Community reports are not refreshed during replay. The scoped-regeneration helper exists and is
+  fingerprinted correctly, but nothing calls it from the event loop.
+
 ## Run the Streamlit demo
 
 ```bash
 streamlit run app.py
 ```
 
-The local app lets you choose retrieval mode, run demo questions, generate grounded answers, and inspect the retrieved local/global context.
+The app has two tabs:
+
+- **Ask** — choose a retrieval mode, run demo questions, generate grounded answers, and inspect
+  the retrieved local/global context. Retrieval settings live in the sidebar.
+- **Live contribution graph** — scrub through the replayed event timeline, see the 1–2 hop
+  neighbourhood each event touched (green added, orange state changed, grey dashed invalidated),
+  read the facts that appeared and retired, and watch the contribution ranking move with the
+  reason attached. Requires `python scripts/replay_events.py` to have been run first.
 
 ## Query modes
 
@@ -430,15 +750,40 @@ src/issue_graphrag/
     qdrant_store.py
   ingest/
     github_loader.py
+  live/
+    ontology.py          # node types, predicates, and who may assert them
+    models.py            # facts, records, deltas, opportunities
+    timeutil.py
+    webhook.py           # signature verification and delivery parsing
+    events.py            # envelope normalization and the append-only event log
+    records.py           # payload -> records, with source-clock versioning
+    facts.py             # GitHub-stated facts
+    extraction.py        # scoped LLM extraction and the offline fixture extractor
+    documents.py         # records -> SourceDocuments and TextUnits
+    store.py             # append-only fact versioning and persistence
+    projection.py        # facts -> graph at any moment, ontology enforced
+    contribution.py      # opportunity scoring and diffing
+    indexer.py           # bootstrap, apply_event, replay, rebuild
+    history.py           # reconstruct what each event did
+    reports.py           # scoped community report regeneration
+    viz.py               # DOT rendering of the affected subgraph
 
 scripts/
   fetch_github_issues.py
+  fetch_live_seed.py
   build_index.py
   build_vector_index.py
   inspect_graph.py
   inspect_relations.py
   regenerate_reports.py
   query.py
+  replay_events.py
+  contribution_report.py
+
+fixtures/live_demo/
+  seed.json
+  events/
+  extraction_rules.json
 
 app.py
 ```
@@ -457,6 +802,27 @@ Known limitations:
 - There is no persistent LLM request cache yet.
 - Local retrieval uses query-term filtering rather than a learned reranker.
 - Generated answers should prefer source snippets over graph edge direction.
+- The live index re-derives GitHub-stated facts for every document on every event. That is
+  microseconds at demo scale and is what guarantees replay/rebuild equivalence, but a very large
+  repository would want the derivation narrowed to documents that mention the changed numbers.
+- Cross-document references only become edges for issues and pull requests the index has actually
+  ingested. A mention of an un-ingested number is left out rather than creating a phantom node.
+- `indexed_at` is a logical clock stored at one-second precision. A burst of N deliveries received
+  in one second can therefore display an index time up to N-1 seconds ahead of `received_at`; order
+  and history remain correct, and the clock converges again as wall time catches up. A production
+  event log should keep `received_at` for display and use a separate sequence for total ordering.
+- Live file nodes are identified by full repo-relative path. An extracted bare basename resolves
+  onto that path only when exactly one known file matches; if several do, it stays a separate node
+  rather than being merged into a file it may not be. The batch pipeline still keys files by
+  basename.
+- Re-chunking a document changes its TextUnit ids, so facts grounded in it get a new version even
+  though the assertion did not change. That is honest — the evidence really did move — but it does
+  mean a large edit produces more versions than a reader might expect.
+- Scoped report regeneration (`live/reports.py`) is a standalone helper, keyed on a fingerprint of
+  the whole report input rather than membership alone. It is **not** wired into the event loop yet,
+  so replaying events does not refresh community reports.
+- Contribution scoring reads only the projected graph. Comment volume is deliberately not a signal,
+  so the ranking stays reproducible from the fact set alone.
 
 These limitations are intentional parts of the project: the pipeline includes inspection and normalization tools to make graph quality debuggable.
 
@@ -470,17 +836,33 @@ This project demonstrates:
 - How to inspect and debug graph quality
 - How to compare GraphRAG retrieval with a BM25 lexical baseline
 - How to generate grounded answers from local and global graph context
+- How to make a knowledge graph incremental without letting it drift from a full rebuild
+- How to keep an ontology as executable code rather than as documentation
+- How to separate what a platform states from what a model infers, and enforce it
+- How to keep every inferred edge traceable to the comment or pull request behind it
+- How to separate a source clock from an ingestion clock so out-of-order events still converge
+- How to write a consistency check that is capable of failing
 
 ## Status
 
-MVP complete.
+- Batch GraphRAG index: MVP complete.
+- Live contribution graph: v0.2 vertical slice complete, driven by replayed fixtures rather than a
+  live webhook endpoint.
 
 ## Future work
 
-The MVP is complete. Possible extensions include:
-
-- **Graph visualization**: add a PyVis or NetworkX-based view for inspecting entity communities and high-degree nodes.
-- **Persistent LLM cache**: cache extraction and report-generation calls to reduce cost and make rebuilds resumable.
-- **Relation direction cleanup**: add validation rules for direction-sensitive relationships such as `improves`, `depends_on`, and `uses`.
+- **Real webhook endpoint**: mount `parse_webhook` behind an HTTP route and register a GitHub App,
+  so deliveries arrive instead of being replayed.
+- **Persistent LLM cache**: cache extraction and report-generation calls keyed by document
+  signature, model id and prompt version. That would make `--llm` rebuilds cheap and resumable, and
+  would extend the rebuild consistency proof to cover live-model runs instead of only the recorded
+  extraction output.
+- **Wire scoped report regeneration into the event loop**, so community reports refresh when the
+  communities they describe actually change.
+- **Pull requests as opportunities**: rank PRs that need review alongside unclaimed issues.
+- **Narrow deterministic re-derivation**: index documents by the issue numbers they mention so the
+  GitHub-fact pass scales past a few thousand documents.
+- **Relation direction cleanup**: the live graph keeps direction on every edge; the batch pipeline
+  still needs validation rules for `improves`, `depends_on`, and `uses`.
 - **Richer source citation formatting**: improve generated answers so they cite issue numbers and source snippets more consistently.
 - **Optional deployment**: package a Streamlit Cloud demo with sample data and secrets management.

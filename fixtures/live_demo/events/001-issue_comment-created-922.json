@@ -1,0 +1,41 @@
+{
+  "headers": {
+    "X-GitHub-Delivery": "d-0001",
+    "X-GitHub-Event": "issue_comment"
+  },
+  "received_at": "2024-05-02T09:00:00Z",
+  "payload": {
+    "action": "created",
+    "issue": {
+      "number": 922,
+      "title": "graph-rag latency: sequential triples-query round trips",
+      "body": "tg-invoke-graph-rag is slow on wide traversals. graph_rag.Processor issues one triples-query call per hop over Pulsar, and each call round-trips to Memgraph. Latency grows linearly with hop count.",
+      "state": "open",
+      "labels": [
+        {
+          "name": "performance"
+        }
+      ],
+      "user": {
+        "login": "maintainer-b"
+      },
+      "html_url": "https://github.com/trustgraph-ai/trustgraph/issues/922",
+      "created_at": "2024-04-11T11:30:00Z",
+      "updated_at": "2024-05-02T09:00:00Z"
+    },
+    "comment": {
+      "id": 7001,
+      "user": {
+        "login": "maintainer-b"
+      },
+      "body": "Profiling says the hop count is not the real cost, the messaging is. A direct Bolt traversal against Memgraph would collapse the per-hop calls into one query and remove the Pulsar hop entirely.",
+      "html_url": "https://github.com/trustgraph-ai/trustgraph/issues/922#issuecomment-7001",
+      "created_at": "2024-05-02T09:00:00Z",
+      "updated_at": "2024-05-02T09:00:00Z"
+    },
+    "repository": {
+      "full_name": "trustgraph-ai/trustgraph"
+    }
+  },
+  "note": "New discussion reveals an alternative approach; #922 gains inferred concepts."
+}
