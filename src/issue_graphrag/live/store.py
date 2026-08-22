@@ -25,13 +25,6 @@ def _dedupe(facts: list[Fact]) -> dict[tuple, Fact]:
     return merged
 
 
-def _payload(fact: Fact) -> tuple:
-    evidence = tuple(
-        sorted((e.kind, e.ref, e.url or "", e.snippet, e.text_unit_id or "") for e in fact.evidence)
-    )
-    return (fact.description, round(fact.weight, 6), evidence)
-
-
 def reconcile_facts(
     state: LiveState,
     document_id: str,
@@ -40,43 +33,51 @@ def reconcile_facts(
     moment: str,
     delivery_id: str | None = None,
 ) -> list[FactChange]:
-    """Replace one document's facts of one origin, closing what no longer holds.
+    """Bring one document's facts of one origin up to date, append-only.
 
-    Facts are never removed from the state. A fact that disappears is closed
-    with ``valid_to`` so the current graph loses it while history keeps it, and
-    a fact that survives keeps its original ``valid_from`` so the graph can say
-    how long something has been true.
+    Three outcomes, and no fourth:
+
+    - the assertion is new             -> append an open version
+    - the assertion no longer holds    -> close the open version
+    - the payload behind it changed    -> close the old version, append a new one
+
+    An assertion that is re-derived unchanged is left completely alone. Nothing
+    in this function mutates a stored fact except to close it, which is what
+    lets a historical projection be read without fear that later evidence has
+    been backfilled into an earlier moment.
     """
     incoming = _dedupe(new_facts)
     current = {fact.key: fact for fact in state.document_facts(document_id, origin)}
     changes: list[FactChange] = []
 
-    for key in sorted(set(incoming) - set(current)):
-        fact = incoming[key]
-        fact.observed_at = moment
-        fact.valid_from = moment
-        fact.valid_to = None
-        fact.first_delivery_id = delivery_id
-        fact.last_delivery_id = delivery_id
-        state.facts.append(fact)
-        changes.append(FactChange(change="added", fact=fact))
+    def open_version(fact: Fact, change: str) -> None:
+        version = fact.model_copy(deep=True)
+        version.valid_from = moment
+        version.valid_to = None
+        version.asserted_by = delivery_id
+        version.invalidated_by = None
+        state.facts.append(version)
+        changes.append(FactChange(change=change, fact=version))
 
-    for key in sorted(set(current) - set(incoming)):
-        fact = current[key]
+    def close_version(fact: Fact, change: str) -> None:
         fact.valid_to = moment
         fact.invalidated_by = delivery_id
-        changes.append(FactChange(change="invalidated", fact=fact))
+        changes.append(FactChange(change=change, fact=fact))
+
+    for key in sorted(set(incoming) - set(current)):
+        open_version(incoming[key], "added")
+
+    for key in sorted(set(current) - set(incoming)):
+        close_version(current[key], "invalidated")
 
     for key in sorted(set(current) & set(incoming)):
         stored, fresh = current[key], incoming[key]
-        stored.last_delivery_id = delivery_id
-        stored.observed_at = moment
-        if _payload(stored) == _payload(fresh):
+        if stored.payload() == fresh.payload():
             continue
-        stored.description = fresh.description or stored.description
-        stored.weight = fresh.weight
-        stored.evidence = fresh.evidence
-        changes.append(FactChange(change="updated", fact=stored))
+        # The assertion still holds but its evidence or description moved, so
+        # the old version is retired and a new one supersedes it.
+        close_version(stored, "superseded")
+        open_version(fresh, "updated")
 
     return changes
 

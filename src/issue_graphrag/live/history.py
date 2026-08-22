@@ -36,16 +36,29 @@ def reconstruct_delta(
     after_graph: nx.Graph | None = None,
 ) -> GraphDelta:
     """Rebuild an event's delta from the fact windows it opened and closed."""
-    moment = event.received_at
+    moment = event.indexed_at or event.received_at
     before = before_graph if before_graph is not None else project_graph(state, before_moment)
     after = after_graph if after_graph is not None else project_graph(state, moment)
 
     changes: list[FactChange] = []
     for fact in sorted(state.facts, key=lambda item: item.key):
-        if fact.valid_to == moment and fact.invalidated_by == event.delivery_id:
-            changes.append(FactChange(change="invalidated", fact=fact))
-        elif fact.valid_from == moment and fact.first_delivery_id == event.delivery_id:
-            changes.append(FactChange(change="added", fact=fact))
+        closed = fact.valid_to == moment and fact.invalidated_by == event.delivery_id
+        opened = fact.valid_from == moment and fact.asserted_by == event.delivery_id
+        if closed and opened:
+            # Same assertion, new version: closed and reopened by one event.
+            continue
+        if closed:
+            superseded = any(
+                other.key == fact.key and other.valid_from == moment for other in state.facts
+            )
+            changes.append(
+                FactChange(change="superseded" if superseded else "invalidated", fact=fact)
+            )
+        elif opened:
+            replaced = any(
+                other.key == fact.key and other.valid_to == moment for other in state.facts
+            )
+            changes.append(FactChange(change="updated" if replaced else "added", fact=fact))
 
     graph_diff = diff_graphs(before, after)
 
@@ -54,6 +67,7 @@ def reconstruct_delta(
         event_type=event.event_type,
         action=event.action,
         occurred_at=moment,
+        indexed_at=moment,
         repo=event.repo,
         fact_changes=changes,
         added_nodes=graph_diff["added_nodes"],
@@ -69,13 +83,17 @@ def timeline(state: LiveState, events: list[RepoEvent], seed_moment: str | None 
     """Ordered views of every applied delivery, oldest first."""
     seen: set[str] = set()
     ordered: list[RepoEvent] = []
-    for event in sorted(events, key=lambda item: (item.received_at, item.delivery_id)):
+    for event in sorted(
+        events, key=lambda item: (item.indexed_at or item.received_at, item.delivery_id)
+    ):
         if event.delivery_id in seen:
             continue
         seen.add(event.delivery_id)
         ordered.append(event)
 
-    previous = seed_moment or (ordered[0].received_at if ordered else None)
+    previous = seed_moment or (
+        (ordered[0].indexed_at or ordered[0].received_at) if ordered else None
+    )
     if previous is None:
         return []
 
@@ -87,15 +105,16 @@ def timeline(state: LiveState, events: list[RepoEvent], seed_moment: str | None 
     graph = project_graph(state, previous)
 
     for event in ordered:
-        after = project_graph(state, event.received_at)
+        moment = event.indexed_at or event.received_at
+        after = project_graph(state, moment)
         views.append(
             EventView(
                 event=event,
                 before_moment=previous,
-                after_moment=event.received_at,
+                after_moment=moment,
                 delta=reconstruct_delta(state, event, previous, graph, after),
             )
         )
-        previous, graph = event.received_at, after
+        previous, graph = moment, after
 
     return views

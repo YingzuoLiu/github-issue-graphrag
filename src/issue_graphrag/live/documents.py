@@ -36,9 +36,3 @@ def all_text_units(state: LiveState) -> list[TextUnit]:
         units.extend(text_units_for(state.items[document_id]))
     return units
 
-
-def text_unit_ids_by_document(state: LiveState) -> dict[str, list[str]]:
-    return {
-        document_id: [unit.id for unit in text_units_for(item)]
-        for document_id, item in state.items.items()
-    }

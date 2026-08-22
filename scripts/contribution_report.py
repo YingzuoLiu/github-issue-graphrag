@@ -82,12 +82,25 @@ def print_history(state: LiveState, node: str) -> None:
         print("  (no facts)")
         return
 
+    # A version that closed at the same moment another version of the same
+    # assertion opened was superseded, not retired: the fact is still true, its
+    # evidence just moved.
+    reopened = {(fact.key, fact.valid_from) for fact in facts}
+
     for fact in facts:
         window = f"{fact.valid_from} -> {fact.valid_to or 'now'}"
-        status = "invalidated" if fact.valid_to else "valid"
+        if not fact.valid_to:
+            status = "valid"
+        elif (fact.key, fact.valid_to) in reopened:
+            status = "superseded"
+        else:
+            status = "invalidated"
         print(f"  [{status:<11}] {window}  [{fact.origin}] {fact.label()}")
+        if fact.asserted_by:
+            print(f"                  asserted by delivery {fact.asserted_by}")
         if fact.invalidated_by:
-            print(f"                  invalidated by delivery {fact.invalidated_by}")
+            verb = "superseded by" if status == "superseded" else "closed by"
+            print(f"                  {verb} delivery {fact.invalidated_by}")
         for evidence in fact.evidence[:2]:
             suffix = f" {evidence.url}" if evidence.url else ""
             print(f"                  via {evidence.kind} {evidence.ref}{suffix}")

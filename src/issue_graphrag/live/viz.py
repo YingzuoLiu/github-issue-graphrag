@@ -32,6 +32,11 @@ def _node_label(name: str, data: dict) -> str:
     node_type = data.get("type", "CONCEPT")
     state = data.get("state")
     suffix = f"\\n({state})" if state else ""
+    if node_type == "FILE":
+        # Files are identified by full path but shown by basename, with the
+        # directory kept as a second line so same-named files stay tellable apart.
+        head, _, tail = name.rpartition("/")
+        return f"{_escape(tail)}\\n{_escape(head)}" if head else _escape(tail)
     if node_type in ("ISSUE", "PULL_REQUEST"):
         title = str(data.get("description") or "")
         if len(title) > 34:

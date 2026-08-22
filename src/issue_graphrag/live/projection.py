@@ -5,8 +5,7 @@ from typing import Any, Iterable
 
 import networkx as nx
 
-from issue_graphrag.live.documents import text_unit_ids_by_document
-from issue_graphrag.live.facts import ItemIndex
+from issue_graphrag.live.facts import basename
 from issue_graphrag.live.models import Fact, GraphDelta, LiveState
 from issue_graphrag.live.ontology import permits
 
@@ -20,12 +19,46 @@ def _edge_key(subject: str, obj: str) -> tuple[str, str]:
     return (subject, obj) if subject <= obj else (obj, subject)
 
 
-def _source_ids(fact: Fact, units_by_document: dict[str, list[str]]) -> list[str]:
-    """Ground a fact in TextUnits so live graph edges stay usable by retrieval."""
-    ids = {e.text_unit_id for e in fact.evidence if e.text_unit_id}
-    if fact.origin == "github":
-        ids.update(units_by_document.get(fact.document_id, []))
-    return sorted(ids)
+def _source_ids(fact: Fact) -> list[str]:
+    """Grounding comes only from the fact's own evidence snapshot.
+
+    Filling this from the document's *current* chunks would mean a projection at
+    an earlier moment cited text that did not exist yet.
+    """
+    return sorted({e.text_unit_id for e in fact.evidence if e.text_unit_id})
+
+
+def alias_map(facts: list[Fact]) -> dict[str, str]:
+    """Names that must resolve onto another node, derived purely from facts.
+
+    Two cases, both of which depend on knowledge the index acquires over time and
+    therefore must be computed from the facts valid at the moment being
+    projected, never from the current records:
+
+    - Extraction canonicalises a bare ``#950`` to ``Issue #950``. Once GitHub has
+      told us 950 is a pull request, that name has to land on ``PR #950``.
+    - Extraction names a file by basename. If exactly one known path ends in that
+      basename, they are the same file; if several do, they are left apart rather
+      than merged into a node that would inherit everyone's edges.
+    """
+    aliases: dict[str, str] = {}
+    paths_by_basename: dict[str, set[str]] = {}
+
+    for fact in facts:
+        if fact.kind != "entity" or fact.predicate != "is_a" or fact.origin != "github":
+            continue
+        if fact.object == "PULL_REQUEST" and fact.subject.startswith("PR #"):
+            aliases[f"Issue #{fact.subject.removeprefix('PR #')}"] = fact.subject
+        elif fact.object == "FILE":
+            paths_by_basename.setdefault(basename(fact.subject), set()).add(fact.subject)
+
+    for name, paths in paths_by_basename.items():
+        if len(paths) == 1:
+            only = next(iter(paths))
+            if name != only:
+                aliases[name] = only
+
+    return aliases
 
 
 def _better_type(current: str, candidate: str, candidate_origin: str) -> str:
@@ -54,11 +87,9 @@ def project_graph(
     selected = list(facts) if facts is not None else state.valid_facts(moment)
     selected.sort(key=lambda fact: fact.key)
 
-    # Extraction cannot know that "#950" is a pull request until the live index
-    # has seen it, so the rename is applied here, where it is a pure function of
-    # the current records, instead of being baked into stored facts.
-    rename = ItemIndex(state.items).rename_map()
-    units_by_document = text_unit_ids_by_document(state)
+    # Resolved from the selected facts alone, so a historical projection cannot
+    # borrow knowledge the index only acquired later.
+    rename = alias_map(selected)
     graph = nx.Graph()
 
     def ensure_node(name: str) -> dict[str, Any]:
@@ -83,10 +114,8 @@ def project_graph(
         node = ensure_node(name)
         node["origins"] = sorted(set(node["origins"]) | {fact.origin})
         node["first_seen"] = min(filter(None, [node["first_seen"], fact.valid_from]))
-        node["last_seen"] = max(filter(None, [node["last_seen"], fact.observed_at]))
-        node["source_ids"] = sorted(
-            set(node["source_ids"]) | set(_source_ids(fact, units_by_document))
-        )
+        node["last_seen"] = max(filter(None, [node["last_seen"], fact.valid_from]))
+        node["source_ids"] = sorted(set(node["source_ids"]) | set(_source_ids(fact)))
         return node
 
     entity_facts = [fact for fact in selected if fact.kind == "entity"]
@@ -116,7 +145,10 @@ def project_graph(
 
         subject_type = graph.nodes[subject]["type"] if graph.has_node(subject) else None
         object_type = graph.nodes[obj]["type"] if graph.has_node(obj) else None
-        if fact.origin == "llm" and not permits(fact.predicate, subject_type, object_type):
+        # Origin decides *who may assert* a predicate; domain and range decide
+        # whether the assertion is legal at all. The second check applies to
+        # every fact, including ones the deterministic path produced.
+        if not permits(fact.predicate, subject_type, object_type):
             continue
 
         touch(subject, fact)
@@ -137,7 +169,7 @@ def project_graph(
                 evidence=[],
                 weight=0.0,
                 first_seen=fact.valid_from,
-                last_seen=fact.observed_at,
+                last_seen=fact.valid_from,
             )
 
         edge = graph.edges[source, target]
@@ -147,12 +179,10 @@ def project_graph(
         edge[bucket] = sorted(set(edge[bucket]) | {fact.predicate})
         if fact.description:
             edge["descriptions"] = sorted(set(edge["descriptions"]) | {fact.description})
-        edge["source_ids"] = sorted(
-            set(edge["source_ids"]) | set(_source_ids(fact, units_by_document))
-        )
+        edge["source_ids"] = sorted(set(edge["source_ids"]) | set(_source_ids(fact)))
         edge["weight"] = round(edge["weight"] + fact.weight, 6)
         edge["first_seen"] = min(edge["first_seen"], fact.valid_from)
-        edge["last_seen"] = max(edge["last_seen"], fact.observed_at)
+        edge["last_seen"] = max(edge["last_seen"], fact.valid_from)
         edge["directed_relations"].append(
             {
                 "source": subject,
@@ -185,8 +215,14 @@ def project_graph(
 def graph_signature(graph: nx.Graph) -> dict[str, list]:
     """Order-independent structural fingerprint used for consistency checks.
 
-    Timestamps are deliberately excluded: a rebuild observes everything at once,
-    while an incremental replay remembers when each fact first appeared.
+    Direction, per-relation origin and evidence are all part of the fingerprint.
+    An earlier version compared only the undirected relation labels, which meant
+    a reversed ``closes`` edge or a fact that had lost its provenance could still
+    report a clean PASS.
+
+    Timestamps are the one thing deliberately excluded: a rebuild observes
+    everything at once, while an incremental replay remembers when each fact
+    first appeared. Those differ by design.
     """
     nodes = sorted(
         (
@@ -195,6 +231,8 @@ def graph_signature(graph: nx.Graph) -> dict[str, list]:
             str(data.get("state") or ""),
             tuple(sorted(data.get("labels", []))),
             str(data.get("description", "")),
+            str(data.get("url") or ""),
+            tuple(sorted(data.get("origins", []))),
             tuple(sorted(data.get("source_ids", []))),
         )
         for name, data in graph.nodes(data=True)
@@ -203,10 +241,27 @@ def graph_signature(graph: nx.Graph) -> dict[str, list]:
         (
             str(source),
             str(target),
-            tuple(sorted(data.get("relations", []))),
-            tuple(sorted(data.get("origins", []))),
+            tuple(
+                sorted(
+                    (row["source"], row["relation"], row["target"], row["origin"], row["document_id"])
+                    for row in data.get("directed_relations", [])
+                )
+            ),
             tuple(sorted(data.get("descriptions", []))),
             tuple(sorted(data.get("source_ids", []))),
+            tuple(
+                sorted(
+                    (
+                        row.get("relation", ""),
+                        row.get("origin", ""),
+                        row.get("kind", ""),
+                        row.get("ref", ""),
+                        row.get("url") or "",
+                        row.get("snippet", ""),
+                    )
+                    for row in data.get("evidence", [])
+                )
+            ),
             round(float(data.get("weight", 0.0)), 6),
         )
         for source, target, data in graph.edges(data=True)
@@ -287,7 +342,7 @@ def event_subgraph(
         else:
             data["change"] = "unchanged"
 
-    rename = ItemIndex(state.items).rename_map()
+    rename = alias_map(state.valid_facts(moment))
     focus = {
         rename.get(name, name)
         for name in delta.focus_nodes()

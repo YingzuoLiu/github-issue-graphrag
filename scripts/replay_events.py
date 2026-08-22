@@ -55,7 +55,7 @@ def print_delta(delta: GraphDelta) -> None:
     print(f"  affected documents : {', '.join(delta.affected_documents) or '(none)'}")
     print(f"  re-extracted       : {', '.join(delta.reextracted_documents) or '(none, text unchanged)'}")
 
-    for change in ("added", "updated", "invalidated"):
+    for change in ("added", "updated", "superseded", "invalidated"):
         facts = delta.changes_of(change)
         for fact in facts:
             print(f"  {change:<12} [{fact.origin}] {fact.label()}")
@@ -106,7 +106,16 @@ def main() -> None:
     parser.add_argument("--state", type=Path, default=None, help="where to write live_state.json")
     parser.add_argument("--event-log", type=Path, default=None, help="where to append the event log")
     parser.add_argument("--resume", action="store_true", help="continue from an existing state file")
-    parser.add_argument("--verify-rebuild", action="store_true", help="compare against a full rebuild")
+    parser.add_argument(
+        "--verify-rebuild",
+        action="store_true",
+        help="rebuild from the records and prove the incremental path did not drift",
+    )
+    parser.add_argument(
+        "--re-extract",
+        action="store_true",
+        help="also re-run extraction during --verify-rebuild (stability check, not a proof)",
+    )
     parser.add_argument("--top", type=int, default=10, help="how many opportunities to print")
     parser.add_argument("--quiet", action="store_true", help="only print the final ranking")
     parser.add_argument("--no-write", action="store_true", help="do not persist state or event log")
@@ -157,10 +166,21 @@ def main() -> None:
     )
 
     if args.verify_rebuild:
-        fresh = rebuild(state, make_extractor(None if args.llm else args.rules))
+        # Default: replay the recorded extraction output, so the comparison is a
+        # statement about this pipeline rather than about the model's
+        # repeatability. --re-extract additionally re-runs extraction.
+        fresh = rebuild(state, make_extractor(None if args.llm else args.rules) if args.re_extract else None)
         match = graph_signature(graph) == graph_signature(project_graph(fresh))
-        print(f"Full-rebuild consistency: {'PASS' if match else 'FAIL'}")
-        if not match:
+
+        if args.re_extract:
+            label = "Extraction stability (re-ran the extractor)"
+            note = "" if match else "  (a live model is not expected to reproduce itself exactly)"
+        else:
+            label = "Rebuild consistency (recorded extraction, deterministic layer rebuilt)"
+            note = ""
+
+        print(f"{label}: {'PASS' if match else 'FAIL'}{note}")
+        if not match and not args.re_extract:
             raise SystemExit(1)
 
     print_opportunities(state, args.top)

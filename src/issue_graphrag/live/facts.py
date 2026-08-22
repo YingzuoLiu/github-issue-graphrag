@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from issue_graphrag.live.models import Evidence, Fact, RepoItem
+from issue_graphrag.models import TextUnit
 
 #: ``#123`` mentions, ignoring markdown headings and colour codes.
 _REFERENCE = re.compile(r"(?<![\w#])#(\d+)\b")
@@ -35,7 +36,16 @@ def module_of(path: str) -> str | None:
 
 
 def file_node_name(path: str) -> str:
-    """File nodes use the basename, matching the batch pipeline's normalizer."""
+    """File nodes are identified by their full repo-relative path.
+
+    Using the basename would silently merge ``src/config.py`` with
+    ``tests/config.py`` into one node, which then inherits the edges of both.
+    The basename is a display concern and is derived at render time.
+    """
+    return path.strip().strip("/")
+
+
+def basename(path: str) -> str:
     return path.strip().strip("/").split("/")[-1]
 
 
@@ -62,10 +72,8 @@ def _fact(
         description=description,
         weight=weight,
         evidence=evidence or [],
-        observed_at=moment,
         valid_from=moment,
-        first_delivery_id=delivery_id,
-        last_delivery_id=delivery_id,
+        asserted_by=delivery_id,
     )
 
 
@@ -99,12 +107,28 @@ class ItemIndex:
 def text_sources(item: RepoItem) -> list[tuple[str, str, str, str | None]]:
     """(kind, ref, text, url) tuples for every place this item states something."""
     sources: list[tuple[str, str, str, str | None]] = [
-        ("title", item.document_id, item.title, item.url),
-        ("body", item.document_id, item.body, item.url),
+        ("title", item.document_id, item.title.strip(), item.url),
+        ("body", item.document_id, item.body.strip(), item.url),
     ]
     for comment in item.ordered_comments():
-        sources.append(("comment", f"comment-{comment.id}", comment.body, comment.url))
+        sources.append(("comment", f"comment-{comment.id}", comment.body.strip(), comment.url))
     return sources
+
+
+def containing_unit(text_units: list[TextUnit], window: str) -> str | None:
+    """Which TextUnit held this text when the fact was derived.
+
+    Snapshotting the unit id onto the fact keeps grounding temporal. Filling a
+    fact's ``source_ids`` from the document's *current* chunks instead would let
+    a historical projection cite text that was written later.
+    """
+    probe = " ".join(window.split())
+    for unit in text_units:
+        if window and window in unit.text:
+            return unit.id
+        if probe and probe in " ".join(unit.text.split()):
+            return unit.id
+    return None
 
 
 def _reference_facts(
@@ -112,6 +136,7 @@ def _reference_facts(
     index: ItemIndex,
     moment: str,
     delivery_id: str | None,
+    text_units: list[TextUnit],
 ) -> list[Fact]:
     facts: dict[tuple[str, str], Fact] = {}
 
@@ -120,8 +145,13 @@ def _reference_facts(
             continue
 
         typed: dict[int, str] = {}
+        # "Fixes #123" in an *issue* is a cross-reference, not a close: the
+        # ontology says only a pull request may close an issue, and the
+        # deterministic path must not emit what the schema forbids.
         for match in _CLOSING.finditer(text):
-            typed[int(match.group(1))] = "closes"
+            typed[int(match.group(1))] = (
+                "closes" if item.kind == "pull_request" else "references"
+            )
         for match in _BLOCKED_BY.finditer(text):
             typed[int(match.group(1))] = "blocked_by"
         blocks = {int(match.group(1)) for match in _BLOCKS.finditer(text)}
@@ -139,11 +169,13 @@ def _reference_facts(
                 # exactly one direction for the blocking relation.
                 predicate, subject, obj = "blocked_by", target, item.node_name
 
+            window = text[max(0, match.start() - _SNIPPET_RADIUS) : match.end() + _SNIPPET_RADIUS]
             evidence = Evidence(
                 kind=kind,
                 ref=ref,
                 url=url,
                 snippet=snippet(text, match.start(), match.end()),
+                text_unit_id=containing_unit(text_units, window),
             )
 
             key = (predicate, f"{subject}->{obj}")
@@ -175,6 +207,7 @@ def _file_facts(item: RepoItem, moment: str, delivery_id: str | None) -> list[Fa
             continue
 
         evidence = Evidence(kind="pull_request_files", ref=path, url=item.url, snippet=path)
+        file_description = f"{basename(path)} ({path})"
 
         facts.append(
             _fact(
@@ -185,7 +218,7 @@ def _file_facts(item: RepoItem, moment: str, delivery_id: str | None) -> list[Fa
                 document_id=item.document_id,
                 moment=moment,
                 delivery_id=delivery_id,
-                description=path,
+                description=file_description,
                 evidence=[evidence],
             )
         )
@@ -240,6 +273,7 @@ def github_facts_for_item(
     index: ItemIndex,
     moment: str,
     delivery_id: str | None = None,
+    text_units: list[TextUnit] | None = None,
 ) -> list[Fact]:
     """Derive every fact GitHub states outright for one issue or pull request.
 
@@ -295,6 +329,6 @@ def github_facts_for_item(
             )
         )
 
-    facts.extend(_reference_facts(item, index, moment, delivery_id))
+    facts.extend(_reference_facts(item, index, moment, delivery_id, text_units or []))
     facts.extend(_file_facts(item, moment, delivery_id))
     return facts

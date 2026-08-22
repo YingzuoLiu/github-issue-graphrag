@@ -79,9 +79,15 @@ def test_github_typing_wins_over_an_inferred_type(seeded_state, extractor):
     )
     apply_event(seeded_state, event, extractor)
 
-    node = project_graph(seeded_state).nodes["kafka_backend.py"]
-    assert node["type"] == "FILE"
-    assert "github" in node["origins"]
+    graph = project_graph(seeded_state)
+    path = "trustgraph-base/trustgraph/base/kafka_backend.py"
+
+    # The file is identified by its full path, and the extractor's bare
+    # basename resolves onto it rather than becoming a second node.
+    assert not graph.has_node("kafka_backend.py")
+    assert graph.nodes[path]["type"] == "FILE"
+    assert "github" in graph.nodes[path]["origins"]
+    assert "llm" in graph.nodes[path]["origins"]
 
 
 def test_node_types_prefer_the_deterministic_assignment():

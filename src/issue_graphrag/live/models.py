@@ -31,11 +31,19 @@ class Evidence(BaseModel):
 
 
 class Fact(BaseModel):
-    """One versioned assertion about the repository.
+    """One immutable version of an assertion about the repository.
 
-    Facts are never deleted. When the underlying text or state stops supporting
-    a fact it is closed with ``valid_to``, which keeps history queryable while
-    removing the fact from the current graph projection.
+    A fact is written once and then only ever closed. Nothing rewrites its
+    description, evidence or timestamps in place: if the payload behind a fact
+    changes, the old version is closed with ``valid_to`` and a new version is
+    appended. That is what makes a historical projection trustworthy — reading
+    the graph at an earlier moment cannot surface evidence that was edited into
+    existence later.
+
+    Re-observing a fact that has not changed is deliberately a no-op. Counting
+    observations would belong in a separate ledger; it must not touch the
+    assertion, or an unrelated event elsewhere in the repository would make
+    every fact look freshly confirmed.
     """
 
     kind: FactKind
@@ -47,12 +55,20 @@ class Fact(BaseModel):
     description: str = ""
     weight: float = 1.0
     evidence: list[Evidence] = Field(default_factory=list)
-    observed_at: str
     valid_from: str
     valid_to: str | None = None
-    first_delivery_id: str | None = None
-    last_delivery_id: str | None = None
+    asserted_by: str | None = None
     invalidated_by: str | None = None
+
+    def payload(self) -> tuple:
+        """Everything that makes this a distinct *version* of the assertion."""
+        evidence = tuple(
+            sorted(
+                (e.kind, e.ref, e.url or "", e.snippet, e.text_unit_id or "")
+                for e in self.evidence
+            )
+        )
+        return (self.description, round(self.weight, 6), evidence)
 
     @property
     def key(self) -> FactKey:
@@ -84,6 +100,10 @@ class Comment(BaseModel):
     url: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    source_delivery_id: str = ""
+
+    def version_key(self) -> tuple[str, str]:
+        return (self.updated_at or self.created_at or "", self.source_delivery_id)
 
 
 class RepoItem(BaseModel):
@@ -106,6 +126,19 @@ class RepoItem(BaseModel):
     merged_at: str | None = None
     comments: dict[str, Comment] = Field(default_factory=dict)
     files: list[str] = Field(default_factory=list)
+
+    #: Source-side version of this record: the newest timestamp GitHub reports
+    #: for it. Distinct from ingestion time, so an out-of-order delivery cannot
+    #: overwrite newer state with older state.
+    effective_at: str | None = None
+    #: Tie-breaker when two payloads claim the same effective_at.
+    source_delivery_id: str = ""
+    #: Comment id -> the effective time it was deleted. A late-arriving create
+    #: or edit for a deleted comment must not resurrect it.
+    deleted_comments: dict[str, str] = Field(default_factory=dict)
+
+    def version_key(self) -> tuple[str, str]:
+        return (self.effective_at or "", self.source_delivery_id)
 
     @property
     def document_id(self) -> str:
@@ -183,13 +216,23 @@ class RepoEvent(BaseModel):
     received_at: str
     payload: dict[str, Any] = Field(default_factory=dict)
     attachments: dict[str, Any] = Field(default_factory=dict)
+    #: When the index actually applied this delivery. Fact validity windows are
+    #: keyed on this, not on ``received_at``, so out-of-order arrivals cannot
+    #: open a validity window in the past.
+    indexed_at: str | None = None
 
     def summary(self) -> str:
         return f"{self.event_type}.{self.action}"
 
 
 class FactChange(BaseModel):
-    change: Literal["added", "updated", "invalidated"]
+    """What happened to one assertion during an event.
+
+    ``superseded`` closes the previous version of an assertion that is still
+    true but whose evidence moved; the replacement is reported as ``updated``.
+    """
+
+    change: Literal["added", "updated", "invalidated", "superseded"]
     fact: Fact
 
 
@@ -241,6 +284,7 @@ class GraphDelta(BaseModel):
     event_type: str
     action: str
     occurred_at: str
+    indexed_at: str
     repo: str
     applied: bool = True
     skip_reason: str | None = None

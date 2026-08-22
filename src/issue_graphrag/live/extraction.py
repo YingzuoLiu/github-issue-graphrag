@@ -150,10 +150,8 @@ def llm_facts_for_item(
                 document_id=item.document_id,
                 description=entity.description,
                 evidence=evidence,
-                observed_at=moment,
                 valid_from=moment,
-                first_delivery_id=delivery_id,
-                last_delivery_id=delivery_id,
+                asserted_by=delivery_id,
             )
         )
 
@@ -176,10 +174,8 @@ def llm_facts_for_item(
                 description=relation.description,
                 weight=relation.weight,
                 evidence=evidence,
-                observed_at=moment,
                 valid_from=moment,
-                first_delivery_id=delivery_id,
-                last_delivery_id=delivery_id,
+                asserted_by=delivery_id,
             )
         )
 

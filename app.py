@@ -176,7 +176,9 @@ def render_opportunities(graph, caption: str) -> None:
 
 def render_change_log(delta) -> None:
     added = delta.changes_of("added")
+    updated = delta.changes_of("updated")
     invalidated = delta.changes_of("invalidated")
+    superseded = delta.changes_of("superseded")
 
     left, right = st.columns(2)
     with left:
@@ -185,12 +187,22 @@ def render_change_log(delta) -> None:
             st.markdown(f"- `{fact.origin}` {fact.label()}")
         if not added:
             st.caption("none")
+        if updated:
+            st.markdown(f"**Re-asserted with new evidence ({len(updated)})**")
+            for fact in updated:
+                st.markdown(f"- `{fact.origin}` {fact.label()}")
     with right:
         st.markdown(f"**Invalidated facts ({len(invalidated)})**")
         for fact in invalidated:
             st.markdown(f"- `{fact.origin}` {fact.label()}")
         if not invalidated:
             st.caption("none")
+        if superseded:
+            st.markdown(f"**Superseded versions ({len(superseded)})**")
+            st.caption(
+                "Still true, but the evidence behind them moved, so the old "
+                "version was closed and a new one opened."
+            )
 
     if delta.opportunity_changes:
         st.markdown("**Recommendation changes**")
@@ -277,8 +289,10 @@ def render_live_tab() -> None:
     event = view.event
 
     st.markdown(
-        f"**Delivery `{event.delivery_id}` — {event.summary()}** at {view.after_moment}  \n"
-        f"Affected the graph between `{view.before_moment}` and `{view.after_moment}`."
+        f"**Delivery `{event.delivery_id}` — {event.summary()}** indexed at "
+        f"{view.after_moment}  \n"
+        f"Affected the graph between `{view.before_moment}` and `{view.after_moment}`. "
+        f"GitHub reported it at `{event.received_at}`."
     )
 
     hops = st.slider("Neighbourhood hops", min_value=1, max_value=3, value=1)
