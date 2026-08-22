@@ -115,6 +115,18 @@ def refresh_inferred(
     if not stale:
         return [], [], []
 
+    if isinstance(extractor, NullExtractor):
+        # Deterministic-only mode cannot claim that stale text was extracted.
+        # Retire model assertions whose source changed, but leave the signature
+        # absent so switching to a real extractor later backfills the document.
+        changes: list[FactChange] = []
+        for document_id in stale:
+            changes.extend(
+                reconcile_facts(state, document_id, "llm", [], moment, delivery_id)
+            )
+            state.extraction_signatures.pop(document_id, None)
+        return changes, [], []
+
     changes: list[FactChange] = []
     rejected: list[RejectedFact] = []
 
@@ -166,8 +178,30 @@ def bootstrap(
 
 def apply_event(state: LiveState, event: RepoEvent, extractor: Extractor) -> GraphDelta:
     """Apply one delivery and report exactly what it changed."""
-    moment = ingestion_moment(state, event)
-    event.indexed_at = moment
+    if state.has_delivery(event.delivery_id):
+        # A worker may have committed state and crashed before appending the
+        # audit log. Its inbox copy already carries the original index clock;
+        # do not invent a later history window while completing the retry.
+        moment = event.indexed_at or state.last_event_at or event.received_at
+        event.indexed_at = moment
+        return GraphDelta(
+            delivery_id=event.delivery_id,
+            event_type=event.event_type,
+            action=event.action,
+            occurred_at=event.received_at,
+            indexed_at=moment,
+            repo=event.repo,
+            applied=False,
+            skip_reason="duplicate delivery",
+        )
+
+    if event.indexed_at and (
+        not state.last_event_at or is_after(event.indexed_at, state.last_event_at)
+    ):
+        moment = event.indexed_at
+    else:
+        moment = ingestion_moment(state, event)
+        event.indexed_at = moment
 
     delta = GraphDelta(
         delivery_id=event.delivery_id,
@@ -177,11 +211,6 @@ def apply_event(state: LiveState, event: RepoEvent, extractor: Extractor) -> Gra
         indexed_at=moment,
         repo=event.repo,
     )
-
-    if state.has_delivery(event.delivery_id):
-        delta.applied = False
-        delta.skip_reason = "duplicate delivery"
-        return delta
 
     before_graph = project_graph(state)
     before_opportunities = opportunities(before_graph)

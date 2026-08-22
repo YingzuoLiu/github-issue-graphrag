@@ -7,9 +7,10 @@ The project has two halves:
 
 - **Batch GraphRAG index (v0.1, complete).** Turns a snapshot of GitHub issues into an entity
   graph with community reports, and answers contribution-oriented questions with grounded context.
-- **Live contribution graph (v0.2).** Replays GitHub events into a versioned, ontology-checked
-  fact store, so the graph updates incrementally and can say how each event moved the
-  recommendations. See [Live contribution graph](#live-contribution-graph-v02).
+- **Live contribution graph (v0.3).** Receives signed GitHub webhooks through a durable inbox and
+  applies them to a versioned, ontology-checked fact store, so the graph updates incrementally and
+  can say how each event moved the recommendations. See
+  [Live contribution graph](#live-contribution-graph-v03).
 
 The demo dataset is TrustGraph, but both halves work against any GitHub repository.
 
@@ -44,7 +45,11 @@ The live pipeline keeps that graph current as the repository moves:
 ```text
 GitHub webhook delivery
   ↓
-signature + delivery-id checks        (deterministic)
+raw-body signature + repo checks      (deterministic HTTP path)
+  ↓
+durable SQLite inbox + delivery id    (deterministic, then HTTP 202)
+  ↓
+worker retry + PR files hydration     (deterministic I/O)
   ↓
 record update: issue / PR / comment   (deterministic)
   ↓
@@ -116,9 +121,12 @@ The Streamlit demo provides a small interface for selecting retrieval mode, runn
 - Grounded answer generation with `--answer`
 - Streamlit demo app
 
-Live contribution graph (v0.2):
+Live contribution graph (v0.3):
 
-- GitHub webhook signature verification and delivery-id deduplication
+- A real HTTP webhook endpoint that verifies the exact raw body and allowlists one repository
+- A durable SQLite inbox with delivery-id deduplication, leases, retries and dead letters
+- A separate worker, so GitHub is acknowledged only after enqueue and never waits for an LLM
+- Paginated pull-request file hydration, including PRs first seen through a comment
 - Issue, pull request and comment ingestion, including changed files
 - Immutable fact versions with `valid_from` / `valid_to`, so history stays queryable and
   historical projections never borrow later knowledge
@@ -258,7 +266,7 @@ data/processed/community_reports.json
 
 without rebuilding the full graph.
 
-## Live contribution graph (v0.2)
+## Live contribution graph (v0.3)
 
 The batch index answers "what is in this repository". It cannot answer the question a
 contributor actually has the next morning:
@@ -266,7 +274,7 @@ contributor actually has the next morning:
 > The opportunity I saw yesterday — has someone opened a PR for it? Did a new comment reveal a
 > blocker? Has the approach I was going to take already been superseded?
 
-v0.2 answers that by replaying GitHub events into a versioned fact store. The differentiator is
+v0.3 answers that by applying GitHub events to a versioned fact store. The differentiator is
 not that there is a picture of a graph on the page. It is that **the graph updates incrementally
 when the repository changes, and explains how those changes move the contribution opportunities.**
 
@@ -473,6 +481,16 @@ properties that make the word "temporal" honest:
 | Same-named files in different directories stay separate | `test_same_named_files_in_different_directories_stay_separate` |
 | A closing keyword in an issue is a reference, not a close | `test_a_closing_keyword_in_an_issue_is_a_reference_not_a_close` |
 
+The real receiver and worker add another set of executable guarantees:
+
+| Property | Test |
+|---|---|
+| A delivery is durably stored before HTTP acknowledges it | `test_receiver_verifies_and_enqueues_without_processing` |
+| Reusing a delivery id for different input is rejected | `test_inbox_deduplicates_a_delivery_and_rejects_id_reuse` |
+| A dead worker's lease is reclaimed without concurrent state writers | `test_only_one_delivery_can_be_processing_and_an_expired_lease_is_reclaimed` |
+| A crash between state and audit log does not repeat extraction | `test_crash_after_state_write_recovers_without_duplicate_extraction_or_log` |
+| Pull request files are paginated and become replay input | `test_pull_request_files_are_paginated_and_canonicalized`, `test_worker_hydrates_pull_request_files_before_indexing` |
+
 ```bash
 python -m pytest tests/test_live_indexer.py tests/test_live_temporal.py -v
 python scripts/replay_events.py --verify-rebuild   # the same rebuild check from the CLI
@@ -492,27 +510,66 @@ every change can be explained:
 | blocked by an issue that is still open | −1.50, status `blocked` |
 | issue is closed | drops out of the ranking |
 
-### Wiring a real webhook
+### Run the real webhook path
 
-`src/issue_graphrag/live/webhook.py` is framework-agnostic. An HTTP handler passes the raw request
-headers and the exact raw body so the signature stays verifiable:
+Set one repository and a high-entropy secret in `.env`:
 
-```python
-from issue_graphrag.live.webhook import parse_webhook
-from issue_graphrag.live.indexer import apply_event
-
-event = parse_webhook(request.headers, request.body, secret=WEBHOOK_SECRET)
-delta = apply_event(state, event, extractor)
+```dotenv
+GITHUB_WEBHOOK_REPO=owner/name
+GITHUB_WEBHOOK_SECRET=replace-me
+GITHUB_TOKEN=optional-token-for-private-repos-and-higher-rate-limits
 ```
 
-`apply_event` is idempotent on delivery id, so GitHub redeliveries are safe. Pull request file
-lists are not in the hook payload; fetch them from the REST API and pass them as
-`attachments={"files": [...]}`, the way the fixtures do.
+If possible, bootstrap the existing repository before switching to events; otherwise the live
+state correctly knows only the issues and pull requests delivered after it started:
 
-### What v0.2 deliberately does not do
+```bash
+python scripts/fetch_live_seed.py owner/name --state all --limit 100
+mkdir -p data/empty-events
+python scripts/replay_events.py \
+  --seed data/raw/owner__name_live_seed.json \
+  --events data/empty-events \
+  --state data/processed/live_state.json
+```
 
-- No HTTP server is included. The signature check, normalization and indexing are, so mounting
-  them behind a route is the remaining step.
+Run the receiver and worker as separate processes:
+
+```bash
+python scripts/serve_webhooks.py --host 0.0.0.0 --port 8000
+python scripts/process_webhooks.py --llm
+```
+
+Register `https://your-host/webhooks/github` for `issues`, `pull_request` and `issue_comment`.
+The included server is a small HTTP reference endpoint; put it behind a TLS reverse proxy. It
+answers `202` only after the exact signed payload is committed to SQLite. The request path does
+not call GitHub or the LLM. The worker then leases one delivery, fetches every page of PR files,
+applies the index, atomically replaces state, appends the audit event once, and marks the delivery
+succeeded. Run `--rules fixtures/live_demo/extraction_rules.json` for deterministic rules, omit
+both extraction flags for GitHub facts only, or use `--llm` for the configured model.
+
+GitHub recommends acknowledging webhooks within ten seconds and processing them asynchronously;
+it also says failed deliveries are **not automatically redelivered**. The inbox retries local
+processing failures, while an exhausted delivery becomes a dead letter. Requeue it with:
+
+```bash
+python scripts/process_webhooks.py --retry-failed --once
+python scripts/process_webhooks.py --status
+```
+
+For a delivery GitHub never successfully sent, use GitHub's delivery UI/API within its documented
+retention window. See GitHub's
+[webhook best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)
+and [redelivery documentation](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks).
+
+### What v0.3 deliberately does not do
+
+- It does not yet authenticate as a GitHub App and poll the delivery-history API for missed
+  deliveries. Local processing retries are automatic; source-side backfill remains an explicit
+  operator action.
+- The inbox gives at-least-once processing, not exactly-once model billing. A crash before the
+  state commit can repeat an LLM request; a persistent extraction cache is the fix for that.
+- The local JSON state has one serialized worker and one configured repository. SQLite makes the
+  handoff durable, but it is not pretending to be a distributed queue.
 - Storage is still local JSON. The fact model is designed so a graph database can replace the
   projection later, but swapping in Neo4j now would add operational weight without answering a
   new question.
@@ -755,6 +812,11 @@ src/issue_graphrag/
     models.py            # facts, records, deltas, opportunities
     timeutil.py
     webhook.py           # signature verification and delivery parsing
+    server.py            # HTTP endpoint; verifies and enqueues only
+    inbox.py             # durable SQLite leases, retry and dead letters
+    github_api.py        # paginated pull-request file hydration
+    processor.py         # inbox -> atomic state + append-once audit log
+    runtime.py           # shared deterministic/rules/LLM extractor setup
     events.py            # envelope normalization and the append-only event log
     records.py           # payload -> records, with source-clock versioning
     facts.py             # GitHub-stated facts
@@ -778,6 +840,8 @@ scripts/
   regenerate_reports.py
   query.py
   replay_events.py
+  serve_webhooks.py
+  process_webhooks.py
   contribution_report.py
 
 fixtures/live_demo/
@@ -799,6 +863,8 @@ Known limitations:
   - Example: a relationship may say `Hybrid Retrieval improves RRF` even when the source text implies `RRF improves Hybrid Retrieval`.
 - Community reports depend on LLM summarization quality.
 - The graph uses lightweight local JSON storage.
+- Real ingestion intentionally serializes one worker against that JSON state. Horizontal workers
+  require a transactional shared state store, not merely more SQLite consumers.
 - There is no persistent LLM request cache yet.
 - Local retrieval uses query-term filtering rather than a learned reranker.
 - Generated answers should prefer source snippets over graph edge direction.
@@ -823,6 +889,9 @@ Known limitations:
   so replaying events does not refresh community reports.
 - Contribution scoring reads only the projected graph. Comment volume is deliberately not a signal,
   so the ranking stays reproducible from the fact set alone.
+- GitHub does not automatically redeliver failed webhooks. The inbox covers failures after this
+  endpoint accepted a delivery; detecting deliveries that never arrived still needs GitHub App
+  delivery-history polling or an operator redelivery.
 
 These limitations are intentional parts of the project: the pipeline includes inspection and normalization tools to make graph quality debuggable.
 
@@ -841,18 +910,21 @@ This project demonstrates:
 - How to separate what a platform states from what a model infers, and enforce it
 - How to keep every inferred edge traceable to the comment or pull request behind it
 - How to separate a source clock from an ingestion clock so out-of-order events still converge
+- How to put a fast, durable at-least-once boundary in front of expensive graph extraction
 - How to write a consistency check that is capable of failing
 
 ## Status
 
 - Batch GraphRAG index: MVP complete.
-- Live contribution graph: v0.2 vertical slice complete, driven by replayed fixtures rather than a
-  live webhook endpoint.
+- Live contribution graph: v0.3 vertical slice complete, with deterministic fixture replay and a
+  real signed webhook receiver backed by a durable local worker inbox.
 
 ## Future work
 
-- **Real webhook endpoint**: mount `parse_webhook` behind an HTTP route and register a GitHub App,
-  so deliveries arrive instead of being replayed.
+- **GitHub App delivery backfill**: authenticate as an App, inspect recent failed/missed deliveries,
+  and schedule source-side redelivery before GitHub's retention window expires.
+- **Distributed ingestion storage**: replace the serialized local JSON writer when multi-repository
+  or horizontal-worker operation becomes a real requirement.
 - **Persistent LLM cache**: cache extraction and report-generation calls keyed by document
   signature, model id and prompt version. That would make `--llm` rebuilds cheap and resumable, and
   would extend the rebuild consistency proof to cover live-model runs instead of only the recorded

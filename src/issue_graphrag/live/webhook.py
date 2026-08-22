@@ -17,6 +17,10 @@ class WebhookError(ValueError):
     """Raised when a delivery cannot be trusted or understood."""
 
 
+class WebhookAuthenticationError(WebhookError):
+    """Raised when the raw body does not match GitHub's signature."""
+
+
 def _lookup(headers: Mapping[str, str], name: str) -> str | None:
     lowered = name.lower()
     for key, value in headers.items():
@@ -54,7 +58,7 @@ def parse_webhook(
     request headers and the exact raw body so the signature stays verifiable.
     """
     if secret and not verify_signature(secret, body, _lookup(headers, SIGNATURE_HEADER)):
-        raise WebhookError("invalid webhook signature")
+        raise WebhookAuthenticationError("invalid webhook signature")
 
     delivery_id = _lookup(headers, DELIVERY_HEADER)
     event_type = _lookup(headers, EVENT_HEADER)
@@ -67,6 +71,8 @@ def parse_webhook(
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise WebhookError("webhook body is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise WebhookError("webhook body must be a JSON object")
 
     envelope = {
         "headers": {DELIVERY_HEADER: delivery_id, EVENT_HEADER: event_type},
@@ -76,4 +82,7 @@ def parse_webhook(
     if received_at:
         envelope["received_at"] = received_at
 
-    return normalize_envelope(envelope)
+    try:
+        return normalize_envelope(envelope)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise WebhookError(str(exc)) from exc

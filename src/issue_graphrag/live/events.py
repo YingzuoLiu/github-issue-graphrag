@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -91,14 +92,38 @@ class EventLog:
     def __init__(self, path: Path):
         self.path = path
 
+    def _repair_truncated_tail(self) -> None:
+        """Drop only an incomplete final JSONL record left by process death."""
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return
+        with self.path.open("r+b") as handle:
+            raw = handle.read()
+            if raw.endswith(b"\n"):
+                return
+            last_complete = raw.rfind(b"\n")
+            handle.truncate(last_complete + 1)
+            handle.flush()
+            os.fsync(handle.fileno())
+
     def append(self, event: RepoEvent) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._repair_truncated_tail()
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event.model_dump(), ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+    def append_once(self, event: RepoEvent) -> bool:
+        """Append unless this delivery is already present in the audit log."""
+        if event.delivery_id in self.delivery_ids():
+            return False
+        self.append(event)
+        return True
 
     def read_all(self) -> list[RepoEvent]:
         if not self.path.exists():
             return []
+        self._repair_truncated_tail()
         events: list[RepoEvent] = []
         with self.path.open("r", encoding="utf-8") as handle:
             for line in handle:

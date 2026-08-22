@@ -14,33 +14,17 @@ from pathlib import Path
 from issue_graphrag.config import load_settings
 from issue_graphrag.live.contribution import opportunities
 from issue_graphrag.live.events import EventLog, load_events
-from issue_graphrag.live.extraction import Extractor, FixtureExtractor, LLMExtractor
 from issue_graphrag.live.indexer import apply_event, bootstrap, rebuild
 from issue_graphrag.live.models import GraphDelta, LiveState
 from issue_graphrag.live.ontology import describe
 from issue_graphrag.live.projection import graph_signature, project_graph
 from issue_graphrag.live.records import seed_items
+from issue_graphrag.live.runtime import configured_extractor
 from issue_graphrag.live.store import read_state, write_state
-from issue_graphrag.llm.client import MockLLMClient, OpenAICompatibleClient
 
 DEFAULT_SEED = Path("fixtures/live_demo/seed.json")
 DEFAULT_EVENTS = Path("fixtures/live_demo/events")
 DEFAULT_RULES = Path("fixtures/live_demo/extraction_rules.json")
-
-
-def make_llm():
-    settings = load_settings()
-    if settings.llm_provider == "openai-compatible":
-        if not settings.llm_base_url or not settings.llm_api_key or not settings.llm_model:
-            raise ValueError("LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL are required")
-        return OpenAICompatibleClient(settings.llm_base_url, settings.llm_api_key, settings.llm_model)
-    return MockLLMClient()
-
-
-def make_extractor(rules: Path | None) -> Extractor:
-    if rules:
-        return FixtureExtractor.from_path(rules)
-    return LLMExtractor(make_llm())
 
 
 def print_delta(delta: GraphDelta) -> None:
@@ -130,7 +114,10 @@ def main() -> None:
     state_path = args.state or settings.processed_data_dir / "live_state.json"
     log_path = args.event_log or settings.processed_data_dir / "event_log.jsonl"
 
-    extractor = make_extractor(None if args.llm else args.rules)
+    extractor = configured_extractor(
+        rules=None if args.llm else args.rules,
+        use_llm=args.llm,
+    )
 
     if args.resume and state_path.exists():
         state = read_state(state_path)
@@ -169,7 +156,15 @@ def main() -> None:
         # Default: replay the recorded extraction output, so the comparison is a
         # statement about this pipeline rather than about the model's
         # repeatability. --re-extract additionally re-runs extraction.
-        fresh = rebuild(state, make_extractor(None if args.llm else args.rules) if args.re_extract else None)
+        fresh = rebuild(
+            state,
+            configured_extractor(
+                rules=None if args.llm else args.rules,
+                use_llm=args.llm,
+            )
+            if args.re_extract
+            else None,
+        )
         match = graph_signature(graph) == graph_signature(project_graph(fresh))
 
         if args.re_extract:

@@ -21,6 +21,21 @@ from typing import Any
 from issue_graphrag.live.models import Comment, LiveState, RepoEvent, RepoItem, SourceVersion
 from issue_graphrag.live.timeutil import max_iso, to_iso
 
+SUPPORTED_EVENT_ACTIONS: dict[str, frozenset[str] | None] = {
+    "issues": None,
+    "pull_request": None,
+    "issue_comment": frozenset({"created", "edited", "deleted"}),
+}
+
+
+def supports_event(event_type: str, action: str) -> bool:
+    """Whether the record layer deliberately understands this delivery shape."""
+    actions = SUPPORTED_EVENT_ACTIONS.get(event_type)
+    if event_type not in SUPPORTED_EVENT_ACTIONS:
+        return False
+    return bool(action) if actions is None else action in actions
+
+
 class UnsupportedEvent(ValueError):
     """Raised for a delivery the incremental indexer intentionally ignores."""
 
@@ -243,6 +258,9 @@ def apply_event_to_records(state: LiveState, event: RepoEvent) -> list[str]:
     repo = event.repo
     delivery = event.delivery_id
 
+    if not supports_event(event.event_type, event.action):
+        raise UnsupportedEvent(f"unsupported event: {event.summary()}")
+
     if event.event_type == "issues":
         issue = payload.get("issue") or {}
         if not issue:
@@ -267,7 +285,9 @@ def apply_event_to_records(state: LiveState, event: RepoEvent) -> list[str]:
 
         number = int(parent["number"])
         kind = resolve_kind(state, repo, number, parent)
-        document_id, _ = upsert_item(state, repo, parent, kind, delivery)
+        files = event.attachments.get("files")
+        files = [str(path) for path in files] if isinstance(files, list) else None
+        document_id, _ = upsert_item(state, repo, parent, kind, delivery, files=files)
 
         if event.action == "deleted":
             deleted_at = max_iso(effective_at(comment), effective_at(parent)) or event.received_at
