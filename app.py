@@ -53,6 +53,15 @@ def load_processed_data():
     return graph, text_units, reports
 
 
+BATCH_INDEX_FILES = ("graph.json", "text_units.json", "community_reports.json")
+
+
+def missing_batch_index() -> list[str]:
+    """Batch-index files that have not been built yet, in load order."""
+    processed = load_settings().processed_data_dir
+    return [name for name in BATCH_INDEX_FILES if not (processed / name).exists()]
+
+
 @st.cache_data(show_spinner=False)
 def load_live_index(state_mtime: float, log_mtime: float):
     """Load the live index. Cache keys are file mtimes so a replay invalidates it."""
@@ -111,6 +120,26 @@ def retrieve_context(mode: str, question: str, graph, text_units, reports):
 
 
 def render_ask_tab(mode: str, generate_answer: bool, show_context: bool, question: str) -> None:
+    missing = missing_batch_index()
+    if missing:
+        # The live tab works straight from a clone; the batch index does not, so
+        # say which file is absent instead of raising FileNotFoundError at the
+        # user through a Streamlit traceback.
+        st.warning(
+            "No batch index yet — `"
+            + "`, `".join(missing)
+            + "` "
+            + ("is" if len(missing) == 1 else "are")
+            + " missing. Build one with:\n\n"
+            "```bash\n"
+            "python scripts/fetch_github_issues.py trustgraph-ai/trustgraph --state open --limit 20\n"
+            "python scripts/build_index.py trustgraph-ai__trustgraph_issues.json\n"
+            "```\n\n"
+            "This step calls the configured LLM provider. The **Live contribution graph** "
+            "tab needs no index and no API key."
+        )
+        return
+
     if not st.button("Run query", type="primary"):
         st.info("Choose a demo question or enter your own, then click Run query.")
         return

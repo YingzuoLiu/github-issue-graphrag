@@ -62,7 +62,15 @@ def print_explain(state: LiveState, node: str, moment: str | None) -> None:
     print("\n  Edges")
     for neighbour in sorted(graph.neighbors(node)):
         edge = graph.edges[node, neighbour]
+        # The projection keeps one row per asserting fact, so a triple stated by
+        # two documents appears twice. The evidence lines below carry that detail;
+        # repeating the triple itself just looks like a bug.
+        seen: set[tuple[str, str, str, str]] = set()
         for row in edge.get("directed_relations", []):
+            key = (row["source"], row["relation"], row["target"], row["origin"])
+            if key in seen:
+                continue
+            seen.add(key)
             marker = "github" if row["origin"] == "github" else "inferred"
             print(f"    [{marker:8}] {row['source']} --{row['relation']}--> {row['target']}")
         for evidence in edge.get("evidence", [])[:3]:

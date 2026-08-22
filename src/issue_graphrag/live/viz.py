@@ -65,7 +65,10 @@ def subgraph_dot(graph: nx.Graph, title: str | None = None) -> str:
 
     for source, target, data in sorted(graph.edges(data=True), key=lambda e: (str(e[0]), str(e[1]))):
         style = CHANGE_STYLE.get(data.get("change", "unchanged"), CHANGE_STYLE["unchanged"])
-        directed = data.get("directed_relations") or []
+        # One row per asserting fact, so the same triple appears once per document
+        # that stated it. That distinction matters to the fingerprint, but drawing
+        # it would stack identical parallel arrows on top of each other.
+        directed = _distinct_relations(data.get("directed_relations") or [])
         inferred_only = data.get("origins") == ["llm"]
         for row in directed or [{"source": source, "target": target, "relation": "related_to"}]:
             lines.append(
@@ -77,6 +80,19 @@ def subgraph_dot(graph: nx.Graph, title: str | None = None) -> str:
 
     lines.append("}")
     return "\n".join(lines)
+
+
+def _distinct_relations(rows: list[dict]) -> list[dict]:
+    """Collapse rows that differ only by which document asserted them."""
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[dict] = []
+    for row in rows:
+        key = (str(row["source"]), str(row["relation"]), str(row["target"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(row)
+    return unique
 
 
 def legend_markdown() -> str:

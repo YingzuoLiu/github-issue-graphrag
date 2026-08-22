@@ -1,5 +1,9 @@
 # GitHub Issue GraphRAG
 
+[![CI](https://github.com/YingzuoLiu/github-issue-graphrag/actions/workflows/ci.yml/badge.svg)](https://github.com/YingzuoLiu/github-issue-graphrag/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.12-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 An event-driven repository intelligence graph that connects issues, discussions, pull requests
 and code modules to explain what changed, why it matters, and where contributors can act next.
 
@@ -13,6 +17,108 @@ The project has two halves:
   [Live contribution graph](#live-contribution-graph-v03).
 
 The demo dataset is TrustGraph, but both halves work against any GitHub repository.
+
+![Live contribution graph](examples/live_contribution_graph.png)
+
+## Run it now
+
+No API key, no network, no Docker, no vector database. The shipped fixtures replay a small
+repository story through the full live pipeline:
+
+```bash
+git clone https://github.com/YingzuoLiu/github-issue-graphrag
+cd github-issue-graphrag
+python -m pip install -e .
+python scripts/replay_events.py --verify-rebuild
+```
+
+Seven webhook deliveries later:
+
+```text
+[d-0004] issue_comment.deleted @ 2024-05-05T12:00:00Z
+-----------------------------------------------------
+  affected documents : trustgraph-ai/trustgraph#issue-875
+  re-extracted       : trustgraph-ai/trustgraph#issue-875
+  invalidated  [llm] Elasticsearch --is_a--> TOOL
+  invalidated  [llm] Elasticsearch --implements--> BM25
+  invalidated  [llm] Issue #875 --proposes--> Elasticsearch
+  nodes +0 -1
+  edges +0 -2
+  recommendation score_changed: Issue #875 available/2.15 -> available/1.95
+      because 1 linked technical concepts: Hybrid Retrieval (+0.20)
+      because no longer: 2 linked technical concepts: Elasticsearch, Hybrid Retrieval (+0.40)
+
+Replayed 7 deliveries (6 applied, 1 skipped): 20 nodes, 21 edges, 68 facts (9 invalidated)
+Rebuild consistency (recorded extraction, deterministic layer rebuilt): PASS
+```
+
+Three things in that output are the point of the project:
+
+1. **A deleted comment retires its inferences instead of erasing them.** The facts are closed with
+   a `valid_to`, so `--as-of` can still project the graph as it stood before the deletion.
+2. **The ranking explains itself.** Every score change names the signal that moved it, and the
+   signals are a fixed arithmetic table, not a model call.
+3. **`PASS` is a check that can fail.** Replaying six events incrementally and rebuilding the
+   whole deterministic layer from scratch land on the same graph fingerprint — one that includes
+   edge direction, per-relation origin and evidence, so a reversed `closes` edge or a fact that
+   lost its provenance would fail it.
+
+Then ask the graph what to work on:
+
+```bash
+python scripts/contribution_report.py
+```
+
+```text
+Contribution opportunities (now)
+===============================
+
+   1.95  available  Issue #875  Improve document retrieval with hybrid retrieval
+         https://github.com/trustgraph-ai/trustgraph/issues/875
+         - open issue (+1.00)
+         - labeled good first issue (+0.75)
+         - 1 linked technical concepts: Hybrid Retrieval (+0.20)
+```
+
+The Streamlit app (`pip install -e ".[app]" && streamlit run app.py`) puts the same replay behind
+a timeline scrubber. Everything above runs offline; only the batch index and `--llm` extraction
+need a provider key.
+
+## Contents
+
+| Section | What is in it |
+|---|---|
+| [What this project does](#what-this-project-does) | The two pipelines, end to end |
+| [Why GraphRAG instead of plain RAG?](#why-graphrag-instead-of-plain-rag) | What the graph layer buys |
+| [Setup](#setup) | Install, `.env`, provider configuration |
+| [Build an index](#build-an-index) | Batch pipeline over a real repository |
+| [Live contribution graph](#live-contribution-graph-v03) | Fact versioning, two clocks, ontology, webhook path |
+| [Retrieval evaluation](#retrieval-evaluation) | Measured BM25 / dense / RRF hybrid numbers |
+| [Known limitations](#known-limitations) | What this is not, in detail |
+| [Future work](#future-work) | What would come next |
+
+## Measured results
+
+Two things in this repository are measurements rather than descriptions, and both ship with their
+raw output and their caveats.
+
+**Retrieval, 12 annotated questions over a 33-TextUnit snapshot** ([full report](eval/results.md)):
+
+| mode | entity recall | source R@8 | source MRR | median query ms |
+|---|---:|---:|---:|---:|
+| BM25 (`naive`) | 0.847 | 0.944 | 0.861 | 0.17 |
+| Dense vector | 0.731 | 0.903 | 0.778 | 9.24 |
+| RRF hybrid | 0.847 | 0.944 | **0.882** | 12.18 |
+
+Hybrid preserved BM25's recall and improved MRR; the pure dense baseline did not beat BM25 on a
+corpus full of issue numbers and file names. Twelve questions is too small for broad claims — see
+[the full discussion](#measured-lexicaldensefusion-baseline).
+
+**Read-only pilot, 3 real repositories, 9 GET requests, 0 writes**
+([method and limitations](docs/real-repo-pilot.md)): the first run exposed a real schema omission —
+assigned issues were still being called available. See
+[the read-only real-repository pilot](#read-only-real-repository-pilot) for what that ablation does
+and does not support.
 
 ## What this project does
 
@@ -94,50 +200,29 @@ The Streamlit demo provides a small interface for selecting retrieval mode, runn
 
 ## Current features
 
-- GitHub issue ingestion
-- Text chunking into TextUnits
-- OpenAI-compatible LLM client, tested with OpenRouter
-- Robust JSON parsing for fenced LLM output
-- Retry logic for unstable LLM API calls
-- Entity and relationship extraction
-- Entity normalization, such as:
-  - `RRF` / `Reciprocal Rank Fusion`
-  - `Graph-RAG` / `graph_rag` / `Graph RAG`
-  - `TrustGraph` / `TG`
-- Graph-level normalization after graph construction
-- Community detection
-- Refined community reports focused on:
-  - technical theme
-  - key entities
-  - contribution opportunities
-  - evidence and uncertainty
-- Graph inspection script
-- Relation inspection script
-- Local GraphRAG retrieval
-- Global community-report retrieval
-- BM25 lexical baseline
-- Optional dense TextUnit retrieval with embedded Qdrant
-- Offline BM25 / vector / RRF hybrid comparison harness
-- Grounded answer generation with `--answer`
-- Streamlit demo app
+**Batch GraphRAG index**
 
-Live contribution graph (v0.3):
+| Area | What is implemented |
+|---|---|
+| Ingestion | GitHub issue fetching, TextUnit chunking |
+| LLM plumbing | OpenAI-compatible client (tested with OpenRouter), fenced-JSON parsing, retry on unstable calls |
+| Extraction | Entity and relationship extraction, then normalization of aliases such as `RRF` / `Reciprocal Rank Fusion`, `Graph-RAG` / `graph_rag` / `Graph RAG`, `TrustGraph` / `TG` |
+| Graph | Graph-level normalization after construction, community detection, community reports covering technical theme, key entities, contribution opportunities, and evidence/uncertainty |
+| Debugging | `inspect_graph.py` and `inspect_relations.py` for entity and relation quality |
+| Retrieval | Local GraphRAG, global community-report, BM25 lexical baseline, optional dense TextUnit retrieval on embedded Qdrant |
+| Evaluation | Offline BM25 / vector / RRF hybrid comparison harness with committed results |
+| Answers | Grounded generation with `--answer`, plus a Streamlit demo app |
 
-- A real HTTP webhook endpoint that verifies the exact raw body and allowlists one repository
-- A durable SQLite inbox with delivery-id deduplication, leases, retries and dead letters
-- A separate worker, so GitHub is acknowledged only after enqueue and never waits for an LLM
-- Paginated pull-request file hydration, including PRs first seen through a comment
-- Issue, pull request and comment ingestion, including changed files
-- Immutable fact versions with `valid_from` / `valid_to`, so history stays queryable and
-  historical projections never borrow later knowledge
-- Source-clock versioning of records: stale payloads, partial payloads and out-of-order
-  deliveries all converge
-- An explicit ontology separating who may assert a predicate from whether the assertion is legal
-- Incremental indexing that re-extracts only the documents whose text changed
-- Rebuild consistency check over a fingerprint that includes direction and provenance
-- Deterministic contribution scoring with per-signal reasons and source links
-- Deterministic event replay from fixtures
-- Timeline view of the affected subgraph in the Streamlit app
+**Live contribution graph (v0.3)**
+
+| Area | What is implemented |
+|---|---|
+| Ingestion boundary | HTTP endpoint that verifies the exact raw body and allowlists one repository; a durable SQLite inbox with delivery-id dedup, leases, retries and dead letters; a separate worker, so GitHub is acknowledged after enqueue and never waits for an LLM |
+| Payload handling | Issue, pull request and comment ingestion including changed files, with paginated PR file hydration — including PRs first seen through a comment |
+| Time model | Immutable fact versions with `valid_from` / `valid_to`, so history stays queryable and historical projections never borrow later knowledge; source-clock record versioning, so stale, partial and out-of-order payloads all converge |
+| Correctness | An explicit ontology separating who may assert a predicate from whether the assertion is legal; a rebuild consistency check fingerprinting direction and provenance |
+| Cost control | Incremental indexing that re-extracts only the documents whose text changed |
+| Output | Deterministic contribution scoring with per-signal reasons and source links, deterministic fixture replay, and a Streamlit timeline of the affected subgraph |
 
 ## Setup
 
@@ -145,21 +230,28 @@ Create and activate a virtual environment:
 
 ```bash
 python -m venv .venv
-source .venv/Scripts/activate
+
+source .venv/bin/activate       # macOS / Linux
+.venv\Scripts\activate          # Windows PowerShell
+source .venv/Scripts/activate   # Windows Git Bash
 ```
 
-Install dependencies:
+Install. The base install is enough for the fixture replay, the graph inspection scripts and the
+test suite:
 
 ```bash
-python -m pip install -e . --no-deps
-python -m pip install requests networkx pydantic python-dotenv rank-bm25 tqdm streamlit
+python -m pip install -e .
 ```
 
-For the optional embedded vector index:
+Add extras as you need them:
 
-```bash
-python -m pip install -e ".[embeddings,vector]"
-```
+| Command | Adds |
+|---|---|
+| `pip install -e ".[app]"` | Streamlit demo app |
+| `pip install -e ".[embeddings,vector]"` | Embedded Qdrant vector index |
+| `pip install -e ".[dev]"` | pytest, ruff, mypy, and everything above except embeddings |
+
+Python 3.10 or newer is required; CI runs 3.10 and 3.12.
 
 Copy the environment file:
 
@@ -277,8 +369,7 @@ contributor actually has the next morning:
 v0.3 answers that by applying GitHub events to a versioned fact store. The differentiator is
 not that there is a picture of a graph on the page. It is that **the graph updates incrementally
 when the repository changes, and explains how those changes move the contribution opportunities.**
-
-![Live contribution graph](examples/live_contribution_graph.png)
+(The Streamlit timeline view is [pictured at the top of this README](#github-issue-graphrag).)
 
 ### Read-only real-repository pilot
 
@@ -427,16 +518,19 @@ lost its provenance could still report a clean PASS.
 Bootstrapped trustgraph-ai/trustgraph: 4 items, 14 nodes, 12 edges
 
 [d-0004] issue_comment.deleted @ 2024-05-05T12:00:00Z
---------------------------------------------------
+-----------------------------------------------------
   affected documents : trustgraph-ai/trustgraph#issue-875
   re-extracted       : trustgraph-ai/trustgraph#issue-875
   invalidated  [llm] Elasticsearch --is_a--> TOOL
   invalidated  [llm] Elasticsearch --implements--> BM25
   invalidated  [llm] Issue #875 --proposes--> Elasticsearch
+  nodes +0 -1
+  edges +0 -2
   recommendation score_changed: Issue #875 available/2.15 -> available/1.95
+      because 1 linked technical concepts: Hybrid Retrieval (+0.20)
       because no longer: 2 linked technical concepts: Elasticsearch, Hybrid Retrieval (+0.40)
 
-Replayed 7 deliveries (6 applied, 1 skipped): 20 nodes, 21 edges, 68 facts (9 closed)
+Replayed 7 deliveries (6 applied, 1 skipped): 20 nodes, 21 edges, 68 facts (9 invalidated)
 Rebuild consistency (recorded extraction, deterministic layer rebuilt): PASS
 ```
 
@@ -610,17 +704,20 @@ and [redelivery documentation](https://docs.github.com/en/webhooks/testing-and-t
 ## Run the Streamlit demo
 
 ```bash
+python -m pip install -e ".[app]"
 streamlit run app.py
 ```
 
 The app has two tabs:
 
 - **Ask** — choose a retrieval mode, run demo questions, generate grounded answers, and inspect
-  the retrieved local/global context. Retrieval settings live in the sidebar.
+  the retrieved local/global context. Retrieval settings live in the sidebar. Needs
+  [a batch index](#build-an-index), which needs a provider key; the tab says so rather than
+  failing if one has not been built.
 - **Live contribution graph** — scrub through the replayed event timeline, see the 1–2 hop
   neighbourhood each event touched (green added, orange state changed, grey dashed invalidated),
   read the facts that appeared and retired, and watch the contribution ranking move with the
-  reason attached. Requires `python scripts/replay_events.py` to have been run first.
+  reason attached. Needs only `python scripts/replay_events.py`, which runs offline.
 
 ## Query modes
 
@@ -898,6 +995,9 @@ Known limitations:
   repository would want the derivation narrowed to documents that mention the changed numbers.
 - Cross-document references only become edges for issues and pull requests the index has actually
   ingested. A mention of an un-ingested number is left out rather than creating a phantom node.
+- `fetch_live_seed.py` paginates the issue/PR list, but takes only the first 100 comments and the
+  first 100 changed files of any single item. The live worker path does paginate PR files fully,
+  so this bounds the bootstrap snapshot, not ongoing ingestion.
 - `indexed_at` is a logical clock stored at one-second precision. A burst of N deliveries received
   in one second can therefore display an index time up to N-1 seconds ahead of `received_at`; order
   and history remain correct, and the clock converges again as wall time catches up. A production
@@ -973,3 +1073,7 @@ This project demonstrates:
   still needs validation rules for `improves`, `depends_on`, and `uses`.
 - **Richer source citation formatting**: improve generated answers so they cite issue numbers and source snippets more consistently.
 - **Optional deployment**: package a Streamlit Cloud demo with sample data and secrets management.
+
+## License
+
+[MIT](LICENSE).
