@@ -73,6 +73,19 @@ def test_parse_webhook_is_case_insensitive_about_headers():
     assert event.repo == REPO
 
 
+def test_parse_webhook_turns_non_object_or_incomplete_json_into_webhook_errors():
+    for payload in ([], {"action": "opened"}):
+        body = _body(payload)
+        headers = {
+            "X-GitHub-Delivery": "d-bad",
+            "X-GitHub-Event": "issues",
+            "X-Hub-Signature-256": compute_signature(SECRET, body),
+        }
+
+        with pytest.raises(WebhookError):
+            parse_webhook(headers, body, secret=SECRET)
+
+
 def test_normalize_envelope_derives_the_timestamp_from_the_payload():
     event = normalize_envelope(
         {
@@ -98,6 +111,62 @@ def test_event_log_round_trips_and_reports_delivery_ids(tmp_path):
 
     assert [event.delivery_id for event in log.read_all()] == ["d-1", "d-2"]
     assert log.delivery_ids() == {"d-1", "d-2"}
+
+
+def test_event_log_append_once_does_not_duplicate_a_delivery(tmp_path):
+    log = EventLog(tmp_path / "event_log.jsonl")
+    event = make_event(
+        "d-1",
+        "issues",
+        {"action": "opened", "issue": issue_payload(1)},
+        "2024-05-01T00:00:00Z",
+    )
+
+    assert log.append_once(event)
+    assert not log.append_once(event)
+    assert [stored.delivery_id for stored in log.read_all()] == ["d-1"]
+
+
+def test_event_log_append_once_uses_a_warm_delivery_index(tmp_path, monkeypatch):
+    path = tmp_path / "event_log.jsonl"
+    log = EventLog(path)
+    first = make_event(
+        "d-1",
+        "issues",
+        {"action": "opened", "issue": issue_payload(1)},
+        "2024-05-01T00:00:00Z",
+    )
+    second = make_event(
+        "d-2",
+        "issues",
+        {"action": "opened", "issue": issue_payload(2)},
+        "2024-05-01T00:00:01Z",
+    )
+
+    assert log.append_once(first)
+
+    def unexpected_rescan():
+        raise AssertionError("append_once rescanned the complete event log")
+
+    monkeypatch.setattr(log, "read_all", unexpected_rescan)
+    assert log.append_once(second)
+    assert not log.append_once(first)
+    assert EventLog(path).delivery_ids() == {"d-1", "d-2"}
+
+
+def test_event_log_repairs_a_truncated_final_write_before_retry(tmp_path):
+    path = tmp_path / "event_log.jsonl"
+    path.write_text('{"delivery_id":"cut off', encoding="utf-8")
+    log = EventLog(path)
+    event = make_event(
+        "d-1",
+        "issues",
+        {"action": "opened", "issue": issue_payload(1)},
+        "2024-05-01T00:00:00Z",
+    )
+
+    assert log.append_once(event)
+    assert [stored.delivery_id for stored in log.read_all()] == ["d-1"]
 
 
 def test_deleting_a_comment_removes_it_from_the_record():
@@ -138,6 +207,22 @@ def test_a_comment_on_a_pull_request_lands_on_the_pull_document():
     assert affected == [f"{REPO}#pull-950"]
     assert state.items[affected[0]].kind == "pull_request"
     assert state.items[affected[0]].node_name == "PR #950"
+
+
+def test_a_comment_on_a_pull_request_can_carry_hydrated_files():
+    state = LiveState(repo=REPO)
+    parent = {**issue_payload(950), "pull_request": {"url": "https://api.github.com/pulls/950"}}
+    event = make_event(
+        "d-1",
+        "issue_comment",
+        {"action": "created", "issue": parent, "comment": {"id": 1, "body": "hi"}},
+        "2024-05-01T00:00:00Z",
+        attachments={"files": ["src/live.py"]},
+    )
+
+    apply_event_to_records(state, event)
+
+    assert state.items[f"{REPO}#pull-950"].files == ["src/live.py"]
 
 
 def test_merge_state_is_taken_from_the_payload():

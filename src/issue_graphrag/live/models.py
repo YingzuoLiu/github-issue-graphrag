@@ -375,7 +375,7 @@ class GraphDelta(BaseModel):
 class LiveState(BaseModel):
     """Everything needed to project the graph at any point in its history."""
 
-    version: str = "0.2"
+    version: str = "0.3"
     repo: str
     items: dict[str, RepoItem] = Field(default_factory=dict)
     facts: list[Fact] = Field(default_factory=list)

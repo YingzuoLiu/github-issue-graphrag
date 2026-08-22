@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from issue_graphrag.live.models import Fact, FactChange, FactOrigin, LiveState
@@ -83,9 +85,38 @@ def reconcile_facts(
 
 
 def write_state(path: Path, state: LiveState) -> None:
+    """Atomically replace state so a killed worker cannot leave partial JSON."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(state.model_dump(), handle, ensure_ascii=False, indent=2)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(state.model_dump(), handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        try:
+            directory = os.open(path.parent, getattr(os, "O_DIRECTORY", 0))
+        except OSError:
+            directory = None
+        if directory is not None:
+            try:
+                try:
+                    os.fsync(directory)
+                except OSError:
+                    pass
+            finally:
+                os.close(directory)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def read_state(path: Path) -> LiveState:

@@ -20,6 +20,8 @@ class Settings:
     vector_db_path: Path
     vector_collection: str
     github_token: str | None
+    github_webhook_repo: str | None
+    github_webhook_secret: str | None
 
 
 def load_settings(env_file: str | None = None) -> Settings:
@@ -40,4 +42,6 @@ def load_settings(env_file: str | None = None) -> Settings:
         vector_db_path=Path(os.getenv("VECTOR_DB_PATH", "data/processed/qdrant")),
         vector_collection=os.getenv("VECTOR_COLLECTION", "issue_graphrag"),
         github_token=os.getenv("GITHUB_TOKEN") or None,
+        github_webhook_repo=os.getenv("GITHUB_WEBHOOK_REPO") or None,
+        github_webhook_secret=os.getenv("GITHUB_WEBHOOK_SECRET") or None,
     )

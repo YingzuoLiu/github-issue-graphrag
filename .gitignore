@@ -24,7 +24,9 @@ data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 *.sqlite
+*.sqlite-*
 *.db
+*.db-*
 *.parquet
 *.pkl
 *.pickle
