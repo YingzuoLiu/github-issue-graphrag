@@ -71,6 +71,21 @@ def _blockers(graph: nx.Graph, issue: str) -> list[str]:
     return sorted(set(blockers))
 
 
+def _assignees(graph: nx.Graph, issue: str) -> list[str]:
+    assignees: list[str] = []
+    for neighbour in graph.neighbors(issue):
+        if graph.nodes[neighbour].get("type") != "CONTRIBUTOR":
+            continue
+        for row in _directed(graph, issue, neighbour):
+            if (
+                row.get("origin") == "github"
+                and row.get("relation") == "assigned_to"
+                and row.get("source") == issue
+            ):
+                assignees.append(str(neighbour))
+    return sorted(set(assignees))
+
+
 def _concepts(graph: nx.Graph, issue: str) -> list[str]:
     return sorted(
         str(neighbour)
@@ -105,6 +120,7 @@ def score_issue(graph: nx.Graph, issue: str) -> Opportunity:
 
     concepts = _concepts(graph, issue)
     claims = _claim_links(graph, issue)
+    assignees = _assignees(graph, issue)
     blockers = _blockers(graph, issue)
 
     score = BASE_SCORE
@@ -130,6 +146,8 @@ def score_issue(graph: nx.Graph, issue: str) -> Opportunity:
         reasons.append(f"blocked by open {', '.join(blockers)} (-{BLOCKED_PENALTY:.2f})")
 
     claimed_by = [node for node, _ in claims]
+    for assignee in assignees:
+        evidence.append(OpportunityEvidence(label=f"assigned to {assignee}", url=url))
     for node, relation in claims:
         pr_state = graph.nodes[node].get("state")
         evidence.append(
@@ -138,12 +156,19 @@ def score_issue(graph: nx.Graph, issue: str) -> Opportunity:
                 url=graph.nodes[node].get("url"),
             )
         )
-    if claims:
+    if claims or assignees:
         score -= CLAIMED_PENALTY
-        detail = ", ".join(f"{node} ({graph.nodes[node].get('state')})" for node, _ in claims)
-        reasons.append(f"already picked up by {detail} (-{CLAIMED_PENALTY:.2f})")
+        details: list[str] = []
+        if assignees:
+            details.append(f"assigned to {', '.join(assignees)}")
+        if claims:
+            pull_detail = ", ".join(
+                f"{node} ({graph.nodes[node].get('state')})" for node, _ in claims
+            )
+            details.append(f"picked up by {pull_detail}")
+        reasons.append(f"already {' and '.join(details)} (-{CLAIMED_PENALTY:.2f})")
 
-    if claims:
+    if claims or assignees:
         status = "claimed"
     elif blockers:
         status = "blocked"
@@ -161,6 +186,7 @@ def score_issue(graph: nx.Graph, issue: str) -> Opportunity:
         labels=labels,
         concepts=concepts,
         claimed_by=claimed_by,
+        assignees=assignees,
         blocked_by=blockers,
         reasons=reasons,
         evidence=evidence,

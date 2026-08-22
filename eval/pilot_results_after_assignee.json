@@ -1,0 +1,1100 @@
+{
+  "evaluation": "real-repository-contribution-pilot-0",
+  "read_only": true,
+  "github_write_requests": 0,
+  "configuration": {
+    "repos": [
+      "getzep/graphiti",
+      "pydantic/pydantic-ai",
+      "trustgraph-ai/trustgraph"
+    ],
+    "issue_limit": 50,
+    "pull_limit": 50,
+    "max_pages": 3,
+    "comment_limit": 100,
+    "top_k": 10,
+    "constraint_contradiction_threshold": 0.05,
+    "extractor": "deterministic GitHub facts only"
+  },
+  "results": [
+    {
+      "repo": "getzep/graphiti",
+      "fetched_at": "2026-08-22T11:02:14Z",
+      "snapshot_fingerprint": "b74ccfc9668c4223be15d4d3543f4712835e04880657e4a58306b0519691fd9f",
+      "collection": {
+        "open_issues": 50,
+        "open_pull_requests": 50,
+        "recent_comments": 100,
+        "github_read_requests": 3,
+        "github_write_requests": 0,
+        "reported_comment_count_on_sampled_items": 273
+      },
+      "system_status_counts": {
+        "available": 20,
+        "claimed": 30,
+        "blocked": 0
+      },
+      "platform_constraints": {
+        "clear": 25,
+        "flagged": 25,
+        "assigned": 3,
+        "locked": 0,
+        "blocked_by_dependency": 0,
+        "claimed_by_closing_pr": 22,
+        "measurement_basis": {
+          "raw_github_fields": [
+            "assignees",
+            "locked",
+            "issue_dependencies_summary"
+          ],
+          "shared_production_parser": [
+            "pull request closing-keyword references"
+          ]
+        }
+      },
+      "metrics": {
+        "product_available_ranking": {
+          "candidate_count": 20,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 1.0,
+          "inspections_for_three_constraint_clear": 3,
+          "top_numbers": [
+            402,
+            459,
+            723,
+            868,
+            1111,
+            1135,
+            1397,
+            1496,
+            1556,
+            1602
+          ]
+        },
+        "without_assignee_fact_ablation": {
+          "candidate_count": 23,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.8,
+          "inspections_for_three_constraint_clear": 3,
+          "top_numbers": [
+            402,
+            459,
+            723,
+            868,
+            1111,
+            1135,
+            1397,
+            1425,
+            1469,
+            1496
+          ],
+          "platform_constraint_contradiction_count": 3,
+          "platform_constraint_contradiction_rate": 0.1304
+        },
+        "github_recent_open_baseline": {
+          "candidate_count": 50,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.4,
+          "inspections_for_three_constraint_clear": 9,
+          "top_numbers": [
+            1728,
+            1789,
+            1651,
+            992,
+            1769,
+            1781,
+            1602,
+            1666,
+            1771,
+            868
+          ]
+        },
+        "github_unassigned_curated_baseline": {
+          "candidate_count": 47,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.4,
+          "inspections_for_three_constraint_clear": 9,
+          "top_numbers": [
+            1728,
+            1789,
+            1651,
+            992,
+            1769,
+            1781,
+            1602,
+            1666,
+            1771,
+            868
+          ]
+        },
+        "platform_constraint_contradiction_count": 0,
+        "platform_constraint_contradiction_rate": 0.0,
+        "causal_evidence_url_coverage": 1.0,
+        "ambiguous_plain_reference_claims": 5,
+        "constraint_clear_coverage": 0.8,
+        "constraint_clear_not_returned_count": 5
+      },
+      "engineering_checks": {
+        "constraint_contradiction_rate_at_most": 0.05,
+        "constraint_contradiction_rate_pass": true,
+        "all_non_available_results_have_causal_evidence_url": true,
+        "github_write_requests_are_zero": true,
+        "higher_constraint_clear_precision_than_recent_at_k": true
+      },
+      "top_product_candidates": [
+        {
+          "number": 402,
+          "title": "Label Propagation Lacks Max Iteration Cap, Risking Infinite Loop on Non-Converging Graphs",
+          "url": "https://github.com/getzep/graphiti/issues/402",
+          "labels": [],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 459,
+          "title": "Support for Amazon Bedrock",
+          "url": "https://github.com/getzep/graphiti/issues/459",
+          "labels": [],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 723,
+          "title": "MCP Server: DEFAULT_MAX_TOKENS 8192 is too restrictive and frequently causes errors",
+          "url": "https://github.com/getzep/graphiti/issues/723",
+          "labels": [],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 868,
+          "title": "[BUG] Cannot get minimal example to work with Ollama",
+          "url": "https://github.com/getzep/graphiti/issues/868",
+          "labels": [
+            "bug"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 1111,
+          "title": "Bug Report: Custom Edge Attributes Not Extracted for First-Time Edges",
+          "url": "https://github.com/getzep/graphiti/issues/1111",
+          "labels": [
+            "bug"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 1135,
+          "title": "[BUG] small model defaults to hardcoded values when using MCP server",
+          "url": "https://github.com/getzep/graphiti/issues/1135",
+          "labels": [
+            "bug"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 1397,
+          "title": "label_propagation has unbounded while True, oscillates forever on mid-sized graphs",
+          "url": "https://github.com/getzep/graphiti/issues/1397",
+          "labels": [],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 1496,
+          "title": "[Azure OpenAI] max_tokens parameter incompatible with newer API versions and response parsing error",
+          "url": "https://github.com/getzep/graphiti/issues/1496",
+          "labels": [],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 1556,
+          "title": "docs(mcp_server): Ollama config example uses outdated flat provider schema + sentence_transformers embedder",
+          "url": "https://github.com/getzep/graphiti/issues/1556",
+          "labels": [],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 1602,
+          "title": "RFC: Salience-Based Fact Filtering and Multi-Tier Memory",
+          "url": "https://github.com/getzep/graphiti/issues/1602",
+          "labels": [],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        }
+      ],
+      "platform_constraint_contradiction_examples": [],
+      "ambiguous_claim_examples": [
+        {
+          "number": 1645,
+          "title": "MCP server: search behavior is hardcoded — proposal: configurable reranker, stale-fact filtering, result counts, relevance scores",
+          "url": "https://github.com/getzep/graphiti/issues/1645",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "referenced_by_open_prs": [
+            1790
+          ],
+          "review_note": "plain PR reference is not independent proof that work is claimed"
+        },
+        {
+          "number": 1714,
+          "title": "RFC: Optional OpenTelemetry metrics + span instrumentation for core memory operations",
+          "url": "https://github.com/getzep/graphiti/issues/1714",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "referenced_by_open_prs": [
+            1718
+          ],
+          "review_note": "plain PR reference is not independent proof that work is claimed"
+        },
+        {
+          "number": 1723,
+          "title": "Anthropic path never emits cache_control, and MODEL_EFFORT does not exist — the \"cheap Opus graph extraction\" recipe silently bills at full input rate",
+          "url": "https://github.com/getzep/graphiti/issues/1723",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "referenced_by_open_prs": [
+            1753
+          ],
+          "review_note": "plain PR reference is not independent proof that work is claimed"
+        },
+        {
+          "number": 1727,
+          "title": "CLA signatures in the bot's own requested format are silently discarded, blocking 18 open PRs",
+          "url": "https://github.com/getzep/graphiti/issues/1727",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "referenced_by_open_prs": [
+            1730
+          ],
+          "review_note": "plain PR reference is not independent proof that work is claimed"
+        },
+        {
+          "number": 1751,
+          "title": "OpenAI models rejected with 400 `invalid_json_schema` on OpenRouter",
+          "url": "https://github.com/getzep/graphiti/issues/1751",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "referenced_by_open_prs": [
+            1752
+          ],
+          "review_note": "plain PR reference is not independent proof that work is claimed"
+        }
+      ],
+      "constraint_clear_not_returned_examples": [
+        {
+          "number": 1645,
+          "title": "MCP server: search behavior is hardcoded — proposal: configurable reranker, stale-fact filtering, result counts, relevance scores",
+          "url": "https://github.com/getzep/graphiti/issues/1645",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "system_reasons": [
+            "open issue (+1.00)",
+            "already picked up by PR #1790 (open) (-2.00)"
+          ],
+          "system_evidence": [
+            {
+              "label": "PR #1790 (open) references this issue",
+              "url": "https://github.com/getzep/graphiti/pull/1790"
+            }
+          ],
+          "known_open_pr_plain_references": [
+            1790
+          ],
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
+        },
+        {
+          "number": 1714,
+          "title": "RFC: Optional OpenTelemetry metrics + span instrumentation for core memory operations",
+          "url": "https://github.com/getzep/graphiti/issues/1714",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "system_reasons": [
+            "open issue (+1.00)",
+            "already picked up by PR #1718 (open) (-2.00)"
+          ],
+          "system_evidence": [
+            {
+              "label": "PR #1718 (open) references this issue",
+              "url": "https://github.com/getzep/graphiti/pull/1718"
+            }
+          ],
+          "known_open_pr_plain_references": [
+            1718
+          ],
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
+        },
+        {
+          "number": 1723,
+          "title": "Anthropic path never emits cache_control, and MODEL_EFFORT does not exist — the \"cheap Opus graph extraction\" recipe silently bills at full input rate",
+          "url": "https://github.com/getzep/graphiti/issues/1723",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "system_reasons": [
+            "open issue (+1.00)",
+            "already picked up by PR #1753 (open) (-2.00)"
+          ],
+          "system_evidence": [
+            {
+              "label": "PR #1753 (open) references this issue",
+              "url": "https://github.com/getzep/graphiti/pull/1753"
+            }
+          ],
+          "known_open_pr_plain_references": [
+            1753
+          ],
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
+        },
+        {
+          "number": 1727,
+          "title": "CLA signatures in the bot's own requested format are silently discarded, blocking 18 open PRs",
+          "url": "https://github.com/getzep/graphiti/issues/1727",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "system_reasons": [
+            "open issue (+1.00)",
+            "already picked up by PR #1718 (open), PR #1726 (open), PR #1730 (draft) (-2.00)"
+          ],
+          "system_evidence": [
+            {
+              "label": "PR #1718 (open) references this issue",
+              "url": "https://github.com/getzep/graphiti/pull/1718"
+            },
+            {
+              "label": "PR #1726 (open) references this issue",
+              "url": "https://github.com/getzep/graphiti/pull/1726"
+            },
+            {
+              "label": "PR #1730 (draft) references this issue",
+              "url": "https://github.com/getzep/graphiti/pull/1730"
+            }
+          ],
+          "known_open_pr_plain_references": [
+            1730
+          ],
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
+        },
+        {
+          "number": 1751,
+          "title": "OpenAI models rejected with 400 `invalid_json_schema` on OpenRouter",
+          "url": "https://github.com/getzep/graphiti/issues/1751",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "system_reasons": [
+            "open issue (+1.00)",
+            "already picked up by PR #1752 (open) (-2.00)"
+          ],
+          "system_evidence": [
+            {
+              "label": "PR #1752 (open) references this issue",
+              "url": "https://github.com/getzep/graphiti/pull/1752"
+            }
+          ],
+          "known_open_pr_plain_references": [
+            1752
+          ],
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
+        }
+      ]
+    },
+    {
+      "repo": "pydantic/pydantic-ai",
+      "fetched_at": "2026-08-22T11:02:20Z",
+      "snapshot_fingerprint": "862b38381c9ad47b0e05929a7ef4431dac748fc7731eabfb9aaa90f06c75bf77",
+      "collection": {
+        "open_issues": 50,
+        "open_pull_requests": 50,
+        "recent_comments": 100,
+        "github_read_requests": 4,
+        "github_write_requests": 0,
+        "reported_comment_count_on_sampled_items": 365
+      },
+      "system_status_counts": {
+        "available": 7,
+        "claimed": 43,
+        "blocked": 0
+      },
+      "platform_constraints": {
+        "clear": 9,
+        "flagged": 41,
+        "assigned": 35,
+        "locked": 0,
+        "blocked_by_dependency": 0,
+        "claimed_by_closing_pr": 7,
+        "measurement_basis": {
+          "raw_github_fields": [
+            "assignees",
+            "locked",
+            "issue_dependencies_summary"
+          ],
+          "shared_production_parser": [
+            "pull request closing-keyword references"
+          ]
+        }
+      },
+      "metrics": {
+        "product_available_ranking": {
+          "candidate_count": 7,
+          "returned_at_k": 7,
+          "constraint_clear_precision_at_k": 0.7,
+          "inspections_for_three_constraint_clear": 3,
+          "top_numbers": [
+            5685,
+            7484,
+            7632,
+            7665,
+            7677,
+            7680,
+            7688
+          ]
+        },
+        "without_assignee_fact_ablation": {
+          "candidate_count": 41,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.0,
+          "inspections_for_three_constraint_clear": 37,
+          "top_numbers": [
+            1270,
+            1275,
+            1590,
+            2330,
+            2472,
+            2605,
+            2837,
+            3314,
+            3336,
+            3561
+          ],
+          "platform_constraint_contradiction_count": 34,
+          "platform_constraint_contradiction_rate": 0.8293
+        },
+        "github_recent_open_baseline": {
+          "candidate_count": 50,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.3,
+          "inspections_for_three_constraint_clear": 3,
+          "top_numbers": [
+            7688,
+            7665,
+            7632,
+            6974,
+            6976,
+            6243,
+            3794,
+            3684,
+            3561,
+            5144
+          ]
+        },
+        "github_unassigned_curated_baseline": {
+          "candidate_count": 15,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.7,
+          "inspections_for_three_constraint_clear": 3,
+          "top_numbers": [
+            7688,
+            7665,
+            7632,
+            7496,
+            7678,
+            7686,
+            7484,
+            7677,
+            7683,
+            7680
+          ]
+        },
+        "platform_constraint_contradiction_count": 0,
+        "platform_constraint_contradiction_rate": 0.0,
+        "causal_evidence_url_coverage": 1.0,
+        "ambiguous_plain_reference_claims": 1,
+        "constraint_clear_coverage": 0.7778,
+        "constraint_clear_not_returned_count": 2
+      },
+      "engineering_checks": {
+        "constraint_contradiction_rate_at_most": 0.05,
+        "constraint_contradiction_rate_pass": true,
+        "all_non_available_results_have_causal_evidence_url": true,
+        "github_write_requests_are_zero": true,
+        "higher_constraint_clear_precision_than_recent_at_k": true
+      },
+      "top_product_candidates": [
+        {
+          "number": 5685,
+          "title": "[aw] No-Op Runs",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/5685",
+          "labels": [
+            "agentic-workflows",
+            "meta",
+            "pydanty:meta"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 7484,
+          "title": "pydantic_evals: SpanQuery with stop_recursing_when silently mis-evaluates every descendant/ancestor condition after the first",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/7484",
+          "labels": [
+            "OpenTelemetry",
+            "bug",
+            "evals",
+            "has-workaround",
+            "p:4-low",
+            "pydanty:bug"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 7632,
+          "title": "`AGUIAdapter` replaces inbound AG-UI message IDs on a load/dump round-trip",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/7632",
+          "labels": [
+            "AG-UI",
+            "area:ui-adapters",
+            "bug",
+            "message-history",
+            "needs-discussion",
+            "p:4-low",
+            "pydanty:bug"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 7665,
+          "title": "Add iFLYTEK Spark (讯飞星火) as a model provider",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/7665",
+          "labels": [],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 7677,
+          "title": "`wait_retry_after()` ignores valid asctime-form `Retry-After` dates",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/7677",
+          "labels": [],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 7680,
+          "title": "Add support for prompt comments with automatic stripping before LLM calls",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/7680",
+          "labels": [
+            "feature"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 7688,
+          "title": "run_stream() hangs after tool call when response has a whitespace TextPart before ToolCallParts (regression of #2256/#3574)",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/7688",
+          "labels": [
+            "bug",
+            "p:2-high",
+            "pydanty:bug"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        }
+      ],
+      "platform_constraint_contradiction_examples": [],
+      "ambiguous_claim_examples": [
+        {
+          "number": 7683,
+          "title": "Test files importing `snapshot` from `inline_snapshot` instead of the `tests._inline_snapshot` wrapper fail locally with an internal `UsageError`",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/7683",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "referenced_by_open_prs": [
+            7681
+          ],
+          "review_note": "plain PR reference is not independent proof that work is claimed"
+        }
+      ],
+      "constraint_clear_not_returned_examples": [
+        {
+          "number": 7648,
+          "title": "Add multimodal `ToolReturn.content` durability coverage for DBOS and Prefect",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/7648",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "system_reasons": [
+            "open issue (+1.00)",
+            "already picked up by PR #7618 (open) (-2.00)"
+          ],
+          "system_evidence": [
+            {
+              "label": "PR #7618 (open) references this issue",
+              "url": "https://github.com/pydantic/pydantic-ai/pull/7618"
+            }
+          ],
+          "known_open_pr_plain_references": [],
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
+        },
+        {
+          "number": 7683,
+          "title": "Test files importing `snapshot` from `inline_snapshot` instead of the `tests._inline_snapshot` wrapper fail locally with an internal `UsageError`",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/7683",
+          "labels": [],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "system_reasons": [
+            "open issue (+1.00)",
+            "already picked up by PR #7681 (open) (-2.00)"
+          ],
+          "system_evidence": [
+            {
+              "label": "PR #7681 (open) references this issue",
+              "url": "https://github.com/pydantic/pydantic-ai/pull/7681"
+            }
+          ],
+          "known_open_pr_plain_references": [
+            7681
+          ],
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
+        }
+      ]
+    },
+    {
+      "repo": "trustgraph-ai/trustgraph",
+      "fetched_at": "2026-08-22T11:02:22Z",
+      "snapshot_fingerprint": "c20e9f8383ca3cc673290f98fa13faa55224ced245b352e659dd1ebe6d7c8899",
+      "collection": {
+        "open_issues": 17,
+        "open_pull_requests": 2,
+        "recent_comments": 100,
+        "github_read_requests": 2,
+        "github_write_requests": 0,
+        "reported_comment_count_on_sampled_items": 59
+      },
+      "system_status_counts": {
+        "available": 14,
+        "claimed": 3,
+        "blocked": 0
+      },
+      "platform_constraints": {
+        "clear": 15,
+        "flagged": 2,
+        "assigned": 2,
+        "locked": 0,
+        "blocked_by_dependency": 0,
+        "claimed_by_closing_pr": 0,
+        "measurement_basis": {
+          "raw_github_fields": [
+            "assignees",
+            "locked",
+            "issue_dependencies_summary"
+          ],
+          "shared_production_parser": [
+            "pull request closing-keyword references"
+          ]
+        }
+      },
+      "metrics": {
+        "product_available_ranking": {
+          "candidate_count": 14,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 1.0,
+          "inspections_for_three_constraint_clear": 3,
+          "top_numbers": [
+            791,
+            874,
+            876,
+            944,
+            157,
+            430,
+            431,
+            432,
+            582,
+            675
+          ]
+        },
+        "without_assignee_fact_ablation": {
+          "candidate_count": 16,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.8,
+          "inspections_for_three_constraint_clear": 3,
+          "top_numbers": [
+            791,
+            874,
+            876,
+            944,
+            157,
+            243,
+            299,
+            430,
+            431,
+            432
+          ],
+          "platform_constraint_contradiction_count": 2,
+          "platform_constraint_contradiction_rate": 0.125
+        },
+        "github_recent_open_baseline": {
+          "candidate_count": 17,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.9,
+          "inspections_for_three_constraint_clear": 3,
+          "top_numbers": [
+            1095,
+            1094,
+            1085,
+            876,
+            874,
+            912,
+            783,
+            944,
+            791,
+            243
+          ]
+        },
+        "github_unassigned_curated_baseline": {
+          "candidate_count": 15,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 1.0,
+          "inspections_for_three_constraint_clear": 3,
+          "top_numbers": [
+            876,
+            874,
+            783,
+            944,
+            791,
+            1095,
+            1094,
+            1085,
+            912,
+            430
+          ]
+        },
+        "platform_constraint_contradiction_count": 0,
+        "platform_constraint_contradiction_rate": 0.0,
+        "causal_evidence_url_coverage": 1.0,
+        "ambiguous_plain_reference_claims": 1,
+        "constraint_clear_coverage": 0.9333,
+        "constraint_clear_not_returned_count": 1
+      },
+      "engineering_checks": {
+        "constraint_contradiction_rate_at_most": 0.05,
+        "constraint_contradiction_rate_pass": true,
+        "all_non_available_results_have_causal_evidence_url": true,
+        "github_write_requests_are_zero": true,
+        "higher_constraint_clear_precision_than_recent_at_k": true
+      },
+      "top_product_candidates": [
+        {
+          "number": 791,
+          "title": "Agent-based extraction hasn't been tested in a while",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/791",
+          "labels": [
+            "code-tidy",
+            "good first issue",
+            "size: medium"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.75,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 874,
+          "title": "Hardcoded timeout values should be configurable",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/874",
+          "labels": [
+            "enhancement",
+            "good first issue",
+            "size: medium"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.75,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 876,
+          "title": "Feature: Multi-hop document-RAG for cross-document questions",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/876",
+          "labels": [
+            "enhancement",
+            "help wanted",
+            "size: large"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.75,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 944,
+          "title": "Kafka backend: blocked consumers and known issues",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/944",
+          "labels": [
+            "bug",
+            "component: pubsub",
+            "help wanted",
+            "size: medium"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.75,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 157,
+          "title": "Nebulagraph integration",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/157",
+          "labels": [
+            "component: graph-store",
+            "size: large"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 430,
+          "title": "Same Entity but different Point id in Qdrant - need for entity deduplication?",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/430",
+          "labels": [
+            "component: vector-store",
+            "size: medium"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 431,
+          "title": "Submission progress in UI",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/431",
+          "labels": [
+            "component: UX",
+            "component: flow-management",
+            "size: medium"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 432,
+          "title": "Idea: pull prompt into the flows to align with Knowledge Cores creation",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/432",
+          "labels": [
+            "component: UX",
+            "component: config-svc",
+            "component: flow-management"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 582,
+          "title": "Inconsistent use of `--config-queue` flag (always falls back to `persistent://tg/config/config`)",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/582",
+          "labels": [
+            "component: pubsub",
+            "component: templates",
+            "size: medium"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 675,
+          "title": "integrate with postgresql and AGE/pgVector for graph/embeddings",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/675",
+          "labels": [
+            "component: graph-store",
+            "size: large"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        }
+      ],
+      "platform_constraint_contradiction_examples": [],
+      "ambiguous_claim_examples": [
+        {
+          "number": 783,
+          "title": "Replace bare except: with specific exceptions",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/783",
+          "labels": [
+            "code-tidy",
+            "good first issue",
+            "size: small"
+          ],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "referenced_by_open_prs": [
+            1097
+          ],
+          "review_note": "plain PR reference is not independent proof that work is claimed"
+        }
+      ],
+      "constraint_clear_not_returned_examples": [
+        {
+          "number": 783,
+          "title": "Replace bare except: with specific exceptions",
+          "url": "https://github.com/trustgraph-ai/trustgraph/issues/783",
+          "labels": [
+            "code-tidy",
+            "good first issue",
+            "size: small"
+          ],
+          "assignees": [],
+          "system_status": "claimed",
+          "system_score": 0.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
+          "system_reasons": [
+            "open issue (+1.00)",
+            "labeled good first issue (+0.75)",
+            "already picked up by PR #1097 (open) (-2.00)"
+          ],
+          "system_evidence": [
+            {
+              "label": "PR #1097 (open) references this issue",
+              "url": "https://github.com/trustgraph-ai/trustgraph/pull/1097"
+            }
+          ],
+          "known_open_pr_plain_references": [
+            1097
+          ],
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
+        }
+      ]
+    }
+  ]
+}

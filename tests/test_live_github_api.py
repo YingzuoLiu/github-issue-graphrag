@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from conftest import REPO, issue_payload, make_event, pull_payload
 
+from issue_graphrag.ingest.github_loader import to_seed_item
 from issue_graphrag.live.github_api import GitHubClient, pull_request_number
 
 
@@ -64,3 +65,19 @@ def test_pull_request_number_understands_both_pr_and_comment_payloads():
     assert pull_request_number(pull) == 950
     assert pull_request_number(comment) == 951
     assert pull_request_number(issue) is None
+
+
+def test_snapshot_loader_preserves_sorted_unique_assignees():
+    raw = issue_payload(
+        1,
+        assignees=[
+            {"login": "octocat"},
+            {"login": "hubot"},
+            {"login": "octocat"},
+            {"login": ""},
+        ],
+    )
+
+    seed = to_seed_item(REPO, raw, "issue")
+
+    assert seed["assignees"] == ["hubot", "octocat"]

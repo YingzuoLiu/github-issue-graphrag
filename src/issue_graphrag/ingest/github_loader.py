@@ -146,6 +146,14 @@ def to_seed_item(
             {str(label.get("name", "")) for label in raw.get("labels", []) if isinstance(label, dict)}
             - {""}
         ),
+        "assignees": sorted(
+            {
+                str(assignee.get("login", ""))
+                for assignee in raw.get("assignees", [])
+                if isinstance(assignee, dict)
+            }
+            - {""}
+        ),
         "author": (raw.get("user") or {}).get("login", ""),
         "url": raw.get("html_url"),
         "created_at": raw.get("created_at"),

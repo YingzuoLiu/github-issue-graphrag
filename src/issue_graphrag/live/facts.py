@@ -5,18 +5,19 @@ import re
 from issue_graphrag.live.models import Evidence, Fact, RepoItem
 from issue_graphrag.models import TextUnit
 
-#: ``#123`` mentions, ignoring markdown headings and colour codes.
-_REFERENCE = re.compile(r"(?<![\w#])#(\d+)\b")
+#: ``#123`` and ``owner/repo#123`` mentions, ignoring headings and colour codes.
+_TARGET = r"(?:(?P<repo>[\w.-]+/[\w.-]+))?#(?P<number>\d+)\b"
+_REFERENCE = re.compile(rf"(?<![\w#]){_TARGET}")
 
 _CLOSING = re.compile(
-    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]*#(\d+)\b",
+    rf"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]*{_TARGET}",
     re.IGNORECASE,
 )
 _BLOCKED_BY = re.compile(
-    r"\b(?:blocked\s+by|depends\s+on|waiting\s+on)\b[:\s]*#(\d+)\b",
+    rf"\b(?:blocked\s+by|depends\s+on|waiting\s+on)\b[:\s]*{_TARGET}",
     re.IGNORECASE,
 )
-_BLOCKS = re.compile(r"\bblocks\b[:\s]*#(\d+)\b", re.IGNORECASE)
+_BLOCKS = re.compile(rf"\bblocks\b[:\s]*{_TARGET}", re.IGNORECASE)
 
 _SNIPPET_RADIUS = 70
 
@@ -24,6 +25,31 @@ _SNIPPET_RADIUS = 70
 def snippet(text: str, start: int, end: int) -> str:
     window = text[max(0, start - _SNIPPET_RADIUS) : min(len(text), end + _SNIPPET_RADIUS)]
     return " ".join(window.split())
+
+
+def _local_number(repo: str, match: re.Match[str]) -> int | None:
+    qualifier = match.group("repo")
+    if qualifier and qualifier.casefold() != repo.casefold():
+        return None
+    return int(match.group("number"))
+
+
+def github_reference_numbers(text: str, repo: str) -> set[int]:
+    """Local issue numbers explicitly mentioned using GitHub reference syntax."""
+    return {
+        number
+        for match in _REFERENCE.finditer(text)
+        if (number := _local_number(repo, match)) is not None
+    }
+
+
+def github_closing_numbers(text: str, repo: str) -> set[int]:
+    """Local issue numbers preceded by a GitHub closing keyword."""
+    return {
+        number
+        for match in _CLOSING.finditer(text)
+        if (number := _local_number(repo, match)) is not None
+    }
 
 
 def module_of(path: str) -> str | None:
@@ -148,23 +174,31 @@ def _reference_facts(
         # "Fixes #123" in an *issue* is a cross-reference, not a close: the
         # ontology says only a pull request may close an issue, and the
         # deterministic path must not emit what the schema forbids.
-        for match in _CLOSING.finditer(text):
-            typed[int(match.group(1))] = (
+        for number in github_closing_numbers(text, item.repo):
+            typed[number] = (
                 "closes" if item.kind == "pull_request" else "references"
             )
         for match in _BLOCKED_BY.finditer(text):
-            typed[int(match.group(1))] = "blocked_by"
-        blocks = {int(match.group(1)) for match in _BLOCKS.finditer(text)}
+            blocked_number = _local_number(item.repo, match)
+            if blocked_number is not None:
+                typed[blocked_number] = "blocked_by"
+        blocks = {
+            block_number
+            for match in _BLOCKS.finditer(text)
+            if (block_number := _local_number(item.repo, match)) is not None
+        }
 
         for match in _REFERENCE.finditer(text):
-            number = int(match.group(1))
-            target = index.node_name(number)
+            reference_number = _local_number(item.repo, match)
+            if reference_number is None:
+                continue
+            target = index.node_name(reference_number)
             if not target or target == item.node_name:
                 continue
 
-            predicate = typed.get(number, "references")
+            predicate = typed.get(reference_number, "references")
             subject, obj = item.node_name, target
-            if number in blocks and number not in typed:
+            if reference_number in blocks and reference_number not in typed:
                 # "A blocks #B" is stored as "#B blocked_by A" so the graph has
                 # exactly one direction for the blocking relation.
                 predicate, subject, obj = "blocked_by", target, item.node_name
@@ -268,6 +302,51 @@ def _file_facts(item: RepoItem, moment: str, delivery_id: str | None) -> list[Fa
     return facts
 
 
+def _assignee_facts(item: RepoItem, moment: str, delivery_id: str | None) -> list[Fact]:
+    facts: list[Fact] = []
+    for login in sorted(set(item.assignees)):
+        account = f"@{login}"
+        assignment_evidence = Evidence(
+            kind="assignee",
+            ref=item.document_id,
+            url=item.url,
+            snippet=f"{item.node_name} is assigned to {account}",
+        )
+        account_evidence = Evidence(
+            kind="github_account",
+            ref=login,
+            url=f"https://github.com/{login}",
+            snippet=account,
+        )
+        facts.extend(
+            [
+                _fact(
+                    kind="entity",
+                    subject=account,
+                    predicate="is_a",
+                    obj="CONTRIBUTOR",
+                    document_id=item.document_id,
+                    moment=moment,
+                    delivery_id=delivery_id,
+                    description=f"GitHub account {account}",
+                    evidence=[account_evidence],
+                ),
+                _fact(
+                    kind="relation",
+                    subject=item.node_name,
+                    predicate="assigned_to",
+                    obj=account,
+                    document_id=item.document_id,
+                    moment=moment,
+                    delivery_id=delivery_id,
+                    description=f"{item.node_name} is assigned to {account}",
+                    evidence=[assignment_evidence],
+                ),
+            ]
+        )
+    return facts
+
+
 def github_facts_for_item(
     item: RepoItem,
     index: ItemIndex,
@@ -277,9 +356,9 @@ def github_facts_for_item(
 ) -> list[Fact]:
     """Derive every fact GitHub states outright for one issue or pull request.
 
-    Nothing here is inferred. State, labels, explicit references, closing
-    keywords and changed files all come straight from the payload, so an LLM can
-    never overwrite what GitHub already told us.
+    Nothing here is inferred. State, labels, assignees, explicit references,
+    closing keywords and changed files all come straight from the payload, so
+    an LLM can never overwrite what GitHub already told us.
     """
     self_evidence = Evidence(
         kind="item",
@@ -331,4 +410,5 @@ def github_facts_for_item(
 
     facts.extend(_reference_facts(item, index, moment, delivery_id, text_units or []))
     facts.extend(_file_facts(item, moment, delivery_id))
+    facts.extend(_assignee_facts(item, moment, delivery_id))
     return facts

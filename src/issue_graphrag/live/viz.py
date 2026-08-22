@@ -21,6 +21,7 @@ NODE_SHAPE = {
     "PULL_REQUEST": "component",
     "FILE": "note",
     "MODULE": "folder",
+    "CONTRIBUTOR": "oval",
 }
 
 

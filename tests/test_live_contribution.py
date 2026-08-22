@@ -7,8 +7,16 @@ import networkx as nx
 from issue_graphrag.live.contribution import diff_opportunities, opportunities, score_issue
 
 
-def graph_with(*, issue_state="open", labels=(), concepts=0, pr_state=None,
-               pr_relation="closes", blocker_state=None) -> nx.Graph:
+def graph_with(
+    *,
+    issue_state="open",
+    labels=(),
+    concepts=0,
+    pr_state=None,
+    pr_relation="closes",
+    blocker_state=None,
+    assignees=(),
+) -> nx.Graph:
     graph = nx.Graph()
     graph.add_node(
         "Issue #1", type="ISSUE", state=issue_state, labels=list(labels),
@@ -40,6 +48,30 @@ def graph_with(*, issue_state="open", labels=(), concepts=0, pr_state=None,
             "Issue #1", "Issue #3",
             directed_relations=[
                 {"source": "Issue #1", "target": "Issue #3", "relation": "blocked_by", "origin": "github"}
+            ],
+        )
+
+    for login in assignees:
+        account = f"@{login}"
+        graph.add_node(
+            account,
+            type="CONTRIBUTOR",
+            state=None,
+            labels=[],
+            description=f"GitHub account {account}",
+            url=f"https://github.com/{login}",
+            number=None,
+        )
+        graph.add_edge(
+            "Issue #1",
+            account,
+            directed_relations=[
+                {
+                    "source": "Issue #1",
+                    "target": account,
+                    "relation": "assigned_to",
+                    "origin": "github",
+                }
             ],
         )
 
@@ -80,6 +112,33 @@ def test_an_open_pull_request_claims_the_issue():
 
 def test_a_merged_pull_request_still_counts_as_claimed():
     assert score_issue(graph_with(pr_state="merged"), "Issue #1").status == "claimed"
+
+
+def test_an_assignee_claims_the_issue_without_counting_as_a_concept():
+    item = score_issue(graph_with(assignees=("octocat",)), "Issue #1")
+
+    assert (item.status, item.score) == ("claimed", 0.0)
+    assert item.assignees == ["@octocat"]
+    assert item.claimed_by == []
+    assert item.concepts == []
+    assert any("assigned to @octocat" in reason for reason in item.reasons)
+    assert any(
+        evidence.label == "assigned to @octocat"
+        and evidence.url == "https://example.test/1"
+        for evidence in item.evidence
+    )
+
+
+def test_assignee_and_pull_request_apply_the_claimed_penalty_only_once():
+    item = score_issue(
+        graph_with(assignees=("octocat",), pr_state="open"),
+        "Issue #1",
+    )
+
+    assert item.score == 0.0
+    assert item.assignees == ["@octocat"]
+    assert item.claimed_by == ["PR #2"]
+    assert sum("(-2.00)" in reason for reason in item.reasons) == 1
 
 
 def test_a_closed_unmerged_pull_request_releases_the_issue():
