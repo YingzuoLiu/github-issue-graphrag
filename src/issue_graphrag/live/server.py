@@ -18,6 +18,7 @@ from issue_graphrag.live.webhook import (
 )
 
 DEFAULT_MAX_BODY_BYTES = 25 * 1024 * 1024
+DEFAULT_READ_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -108,10 +109,18 @@ def create_http_server(
     receiver: WebhookReceiver,
     host: str = "127.0.0.1",
     port: int = 8000,
+    read_timeout_seconds: float = DEFAULT_READ_TIMEOUT_SECONDS,
 ) -> ThreadingHTTPServer:
     """Adapt ``WebhookReceiver`` to the Python standard-library HTTP server."""
+    if read_timeout_seconds <= 0:
+        raise ValueError("read_timeout_seconds must be positive")
 
     class Handler(BaseHTTPRequestHandler):
+        # StreamRequestHandler.setup() applies this to the accepted socket before
+        # request headers or the signed body are read. An unauthenticated peer can
+        # therefore hold a handler thread only for this bounded interval.
+        timeout = read_timeout_seconds
+
         def _send(self, response: WebhookResponse) -> None:
             raw = json.dumps(response.body, ensure_ascii=False).encode("utf-8")
             self.send_response(response.status_code)

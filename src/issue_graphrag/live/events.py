@@ -91,49 +91,89 @@ class EventLog:
 
     def __init__(self, path: Path):
         self.path = path
+        self._known_delivery_ids: set[str] | None = None
+        self._tail_is_clean = False
 
     def _repair_truncated_tail(self) -> None:
         """Drop only an incomplete final JSONL record left by process death."""
         if not self.path.exists() or self.path.stat().st_size == 0:
             return
         with self.path.open("r+b") as handle:
-            raw = handle.read()
-            if raw.endswith(b"\n"):
+            handle.seek(0, os.SEEK_END)
+            end = handle.tell()
+            handle.seek(-1, os.SEEK_END)
+            if handle.read(1) == b"\n":
                 return
-            last_complete = raw.rfind(b"\n")
-            handle.truncate(last_complete + 1)
+
+            truncate_at = 0
+            position = end
+            while position > 0:
+                block_size = min(64 * 1024, position)
+                position -= block_size
+                handle.seek(position)
+                block = handle.read(block_size)
+                last_complete = block.rfind(b"\n")
+                if last_complete >= 0:
+                    truncate_at = position + last_complete + 1
+                    break
+
+            handle.truncate(truncate_at)
             handle.flush()
             os.fsync(handle.fileno())
 
-    def append(self, event: RepoEvent) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+    def _scan(self) -> list[RepoEvent]:
+        self._known_delivery_ids = None
+        self._tail_is_clean = False
         self._repair_truncated_tail()
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event.model_dump(), ensure_ascii=False) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        events: list[RepoEvent] = []
+        if self.path.exists():
+            with self.path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if line:
+                        events.append(RepoEvent.model_validate(json.loads(line)))
+        self._known_delivery_ids = {event.delivery_id for event in events}
+        self._tail_is_clean = True
+        return events
+
+    def _ensure_delivery_index(self) -> None:
+        if self._known_delivery_ids is None or not self._tail_is_clean:
+            self._scan()
+
+    def append(self, event: RepoEvent) -> None:
+        self._ensure_delivery_index()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._tail_is_clean = False
+        try:
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event.model_dump(), ensure_ascii=False) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        except Exception:
+            # A failed write may have left a partial line. Force the next call to
+            # repair the tail and rebuild the index before deciding idempotency.
+            self._known_delivery_ids = None
+            raise
+        self._tail_is_clean = True
+        assert self._known_delivery_ids is not None
+        self._known_delivery_ids.add(event.delivery_id)
 
     def append_once(self, event: RepoEvent) -> bool:
         """Append unless this delivery is already present in the audit log."""
-        if event.delivery_id in self.delivery_ids():
+        self._ensure_delivery_index()
+        assert self._known_delivery_ids is not None
+        if event.delivery_id in self._known_delivery_ids:
             return False
         self.append(event)
         return True
 
     def read_all(self) -> list[RepoEvent]:
-        if not self.path.exists():
-            return []
-        self._repair_truncated_tail()
-        events: list[RepoEvent] = []
-        with self.path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if line:
-                    events.append(RepoEvent.model_validate(json.loads(line)))
-        return events
+        return self._scan()
 
     def delivery_ids(self) -> set[str]:
-        return {event.delivery_id for event in self.read_all()}
+        self._ensure_delivery_index()
+        assert self._known_delivery_ids is not None
+        return set(self._known_delivery_ids)
 
     def extend(self, events: Iterable[RepoEvent]) -> None:
         for event in events:

@@ -7,7 +7,12 @@ from pathlib import Path
 
 from issue_graphrag.config import load_settings
 from issue_graphrag.live.inbox import DeliveryInbox
-from issue_graphrag.live.server import DEFAULT_MAX_BODY_BYTES, WebhookReceiver, create_http_server
+from issue_graphrag.live.server import (
+    DEFAULT_MAX_BODY_BYTES,
+    DEFAULT_READ_TIMEOUT_SECONDS,
+    WebhookReceiver,
+    create_http_server,
+)
 
 
 def main() -> None:
@@ -17,6 +22,12 @@ def main() -> None:
     parser.add_argument("--inbox", type=Path, default=None, help="SQLite inbox path")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--read-timeout-seconds",
+        type=float,
+        default=DEFAULT_READ_TIMEOUT_SECONDS,
+        help="maximum time spent reading one request",
+    )
     parser.add_argument(
         "--max-body-mb",
         type=int,
@@ -31,6 +42,8 @@ def main() -> None:
         parser.error("--repo or GITHUB_WEBHOOK_REPO is required")
     if not secret:
         parser.error("--secret or GITHUB_WEBHOOK_SECRET is required")
+    if args.read_timeout_seconds <= 0:
+        parser.error("--read-timeout-seconds must be positive")
 
     inbox_path = args.inbox or settings.processed_data_dir / "webhook_inbox.sqlite"
     receiver = WebhookReceiver(
@@ -39,7 +52,12 @@ def main() -> None:
         inbox=DeliveryInbox(inbox_path),
         max_body_bytes=args.max_body_mb * 1024 * 1024,
     )
-    server = create_http_server(receiver, host=args.host, port=args.port)
+    server = create_http_server(
+        receiver,
+        host=args.host,
+        port=args.port,
+        read_timeout_seconds=args.read_timeout_seconds,
+    )
     print(f"Listening on http://{args.host}:{server.server_port}/webhooks/github")
     print(f"Accepting signed deliveries for {repo}; inbox: {inbox_path}")
     try:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import socket
 import threading
 
 from conftest import REPO, issue_payload
@@ -134,6 +135,38 @@ def test_stdlib_http_adapter_exposes_health_and_webhook_routes(tmp_path):
         assert json.loads(accepted.read())["status"] == "enqueued"
         connection.close()
     finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_http_adapter_times_out_an_incomplete_request_body(tmp_path):
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    receiver = WebhookReceiver(secret=SECRET, repo=REPO, inbox=inbox)
+    server = create_http_server(
+        receiver,
+        host="127.0.0.1",
+        port=0,
+        read_timeout_seconds=0.1,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    client = socket.create_connection(("127.0.0.1", server.server_port), timeout=2)
+    try:
+        client.sendall(
+            b"POST /webhooks/github HTTP/1.1\r\n"
+            b"Host: localhost\r\n"
+            b"Content-Length: 10\r\n"
+            b"\r\n"
+            b"x"
+        )
+        client.settimeout(2)
+
+        assert client.recv(1) == b""
+        assert inbox.count() == 0
+    finally:
+        client.close()
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Thread
@@ -27,6 +29,10 @@ class ProcessingResult:
     status: Literal["succeeded", "retrying", "failed"]
     delta: GraphDelta | None = None
     error: str | None = None
+
+
+class DeliveryWorker(Protocol):
+    def process_one(self) -> ProcessingResult | None: ...
 
 
 class _LeaseHeartbeat:
@@ -183,3 +189,32 @@ class DeliveryProcessor:
                 outcome,
                 error=f"{type(exc).__name__}: {exc}",
             )
+
+
+def run_worker_loop(
+    processor: DeliveryWorker,
+    poll_seconds: float,
+    on_result: Callable[[ProcessingResult], None],
+    on_error: Callable[[Exception], None],
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Supervise daemon iterations without swallowing an intentional shutdown.
+
+    ``process_one`` normally turns delivery failures into retry/dead-letter
+    results. Infrastructure can still fail while claiming a lease or recording
+    that result. Those exceptions must not terminate a long-running worker.
+    """
+    if poll_seconds < 0:
+        raise ValueError("poll_seconds must be non-negative")
+
+    while True:
+        try:
+            result = processor.process_one()
+        except Exception as exc:
+            on_error(exc)
+            sleep(max(1.0, poll_seconds))
+            continue
+        if result is None:
+            sleep(poll_seconds)
+        else:
+            on_result(result)

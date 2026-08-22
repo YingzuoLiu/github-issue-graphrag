@@ -490,6 +490,9 @@ The real receiver and worker add another set of executable guarantees:
 | A dead worker's lease is reclaimed without concurrent state writers | `test_only_one_delivery_can_be_processing_and_an_expired_lease_is_reclaimed` |
 | A crash between state and audit log does not repeat extraction | `test_crash_after_state_write_recovers_without_duplicate_extraction_or_log` |
 | Pull request files are paginated and become replay input | `test_pull_request_files_are_paginated_and_canonicalized`, `test_worker_hydrates_pull_request_files_before_indexing` |
+| An incomplete unauthenticated request cannot hold a handler forever | `test_http_adapter_times_out_an_incomplete_request_body` |
+| Audit-log idempotency does not rescan the full JSONL on every append | `test_event_log_append_once_uses_a_warm_delivery_index` |
+| A transient iteration failure does not terminate the daemon | `test_worker_loop_survives_an_iteration_failure_and_keeps_processing` |
 
 ```bash
 python -m pytest tests/test_live_indexer.py tests/test_live_temporal.py -v
@@ -540,12 +543,15 @@ python scripts/process_webhooks.py --llm
 ```
 
 Register `https://your-host/webhooks/github` for `issues`, `pull_request` and `issue_comment`.
-The included server is a small HTTP reference endpoint; put it behind a TLS reverse proxy. It
-answers `202` only after the exact signed payload is committed to SQLite. The request path does
-not call GitHub or the LLM. The worker then leases one delivery, fetches every page of PR files,
-applies the index, atomically replaces state, appends the audit event once, and marks the delivery
-succeeded. Run `--rules fixtures/live_demo/extraction_rules.json` for deterministic rules, omit
-both extraction flags for GitHub facts only, or use `--llm` for the configured model.
+The included server is a small HTTP reference endpoint; put it behind a TLS reverse proxy that
+also enforces connection limits and rate limits. The endpoint itself bounds request reads to 30
+seconds by default (`--read-timeout-seconds`) so an unauthenticated slow client cannot pin a handler
+thread indefinitely. It answers `202` only after the exact signed payload is committed to SQLite.
+The request path does not call GitHub or the LLM. The worker then leases one delivery, fetches every
+page of PR files, applies the index, atomically replaces state, appends the audit event once, and
+marks the delivery succeeded. Run `--rules fixtures/live_demo/extraction_rules.json` for
+deterministic rules, omit both extraction flags for GitHub facts only, or use `--llm` for the
+configured model.
 
 GitHub recommends acknowledging webhooks within ten seconds and processing them asynchronously;
 it also says failed deliveries are **not automatically redelivered**. The inbox retries local
@@ -877,6 +883,12 @@ Known limitations:
   in one second can therefore display an index time up to N-1 seconds ahead of `received_at`; order
   and history remain correct, and the clock converges again as wall time catches up. A production
   event log should keep `received_at` for display and use a separate sequence for total ordering.
+  Deliveries enqueued in the same second use `delivery_id` as a stable tie-breaker. That produces a
+  deterministic replay order, but it does not claim to reconstruct their source chronology; the
+  per-field source clocks make final records converge despite that arbitrary intermediate order.
+- The reference `ThreadingHTTPServer` has a bounded per-connection read timeout but no global
+  concurrency or rate limit. Internet-facing deployments still need an edge proxy for TLS,
+  connection caps and abuse controls.
 - Live file nodes are identified by full repo-relative path. An extracted bare basename resolves
   onto that path only when exactly one known file matches; if several do, it stays a separate node
   rather than being merged into a file it may not be. The batch pipeline still keys files by

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import pytest
 from conftest import REPO, issue_payload, make_event, pull_payload
 
 from issue_graphrag.live.events import EventLog
 from issue_graphrag.live.inbox import DeliveryInbox
 from issue_graphrag.live.indexer import NullExtractor
 from issue_graphrag.models import ExtractionResult
-from issue_graphrag.live.processor import DeliveryProcessor
+from issue_graphrag.live.processor import DeliveryProcessor, ProcessingResult, run_worker_loop
 from issue_graphrag.live.store import read_state
 
 NOW = "2024-06-01T10:00:00Z"
@@ -197,3 +198,36 @@ def test_github_fetch_failure_is_retried_without_writing_state(tmp_path):
     assert second is not None and second.status == "failed"
     assert not (tmp_path / "live_state.json").exists()
     assert inbox.get("delivery-1").attempts == 2  # type: ignore[union-attr]
+
+
+def test_worker_loop_survives_an_iteration_failure_and_keeps_processing():
+    class FlakyProcessor:
+        def __init__(self):
+            self.calls = 0
+
+        def process_one(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary sqlite failure")
+            if self.calls == 2:
+                return ProcessingResult("delivery-2", "retrying", error="retry me")
+            raise KeyboardInterrupt
+
+    processor = FlakyProcessor()
+    results = []
+    errors = []
+    sleeps = []
+
+    with pytest.raises(KeyboardInterrupt):
+        run_worker_loop(
+            processor,
+            poll_seconds=0,
+            on_result=results.append,
+            on_error=errors.append,
+            sleep=sleeps.append,
+        )
+
+    assert processor.calls == 3
+    assert [result.delivery_id for result in results] == ["delivery-2"]
+    assert [str(error) for error in errors] == ["temporary sqlite failure"]
+    assert sleeps == [1.0]

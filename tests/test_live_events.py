@@ -127,6 +127,33 @@ def test_event_log_append_once_does_not_duplicate_a_delivery(tmp_path):
     assert [stored.delivery_id for stored in log.read_all()] == ["d-1"]
 
 
+def test_event_log_append_once_uses_a_warm_delivery_index(tmp_path, monkeypatch):
+    path = tmp_path / "event_log.jsonl"
+    log = EventLog(path)
+    first = make_event(
+        "d-1",
+        "issues",
+        {"action": "opened", "issue": issue_payload(1)},
+        "2024-05-01T00:00:00Z",
+    )
+    second = make_event(
+        "d-2",
+        "issues",
+        {"action": "opened", "issue": issue_payload(2)},
+        "2024-05-01T00:00:01Z",
+    )
+
+    assert log.append_once(first)
+
+    def unexpected_rescan():
+        raise AssertionError("append_once rescanned the complete event log")
+
+    monkeypatch.setattr(log, "read_all", unexpected_rescan)
+    assert log.append_once(second)
+    assert not log.append_once(first)
+    assert EventLog(path).delivery_ids() == {"d-1", "d-2"}
+
+
 def test_event_log_repairs_a_truncated_final_write_before_retry(tmp_path):
     path = tmp_path / "event_log.jsonl"
     path.write_text('{"delivery_id":"cut off', encoding="utf-8")

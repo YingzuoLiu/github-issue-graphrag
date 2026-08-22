@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import time
+import sys
 from pathlib import Path
 
 from issue_graphrag.config import load_settings
 from issue_graphrag.live.events import EventLog
 from issue_graphrag.live.github_api import GitHubClient
 from issue_graphrag.live.inbox import DeliveryInbox
-from issue_graphrag.live.processor import DeliveryProcessor, ProcessingResult
+from issue_graphrag.live.processor import DeliveryProcessor, ProcessingResult, run_worker_loop
 from issue_graphrag.live.runtime import configured_extractor
 from issue_graphrag.live.timeutil import now_utc, to_iso
 
@@ -26,6 +26,13 @@ def _print_result(result: ProcessingResult) -> None:
         )
         return
     print(f"[{result.delivery_id}] {result.status}: {result.error}")
+
+
+def _print_worker_error(error: Exception) -> None:
+    print(
+        f"Worker iteration failed; retrying: {type(error).__name__}: {error}",
+        file=sys.stderr,
+    )
 
 
 def main() -> None:
@@ -104,12 +111,12 @@ def main() -> None:
 
     print(f"Processing {inbox_path} for {repo}; state: {state_path}")
     try:
-        while True:
-            result = processor.process_one()
-            if result is None:
-                time.sleep(args.poll_seconds)
-            else:
-                _print_result(result)
+        run_worker_loop(
+            processor,
+            poll_seconds=args.poll_seconds,
+            on_result=_print_result,
+            on_error=_print_worker_error,
+        )
     except KeyboardInterrupt:
         pass
 
