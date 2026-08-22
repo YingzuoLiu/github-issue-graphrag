@@ -1,0 +1,44 @@
+{
+  "headers": {
+    "X-GitHub-Delivery": "d-0004",
+    "X-GitHub-Event": "issue_comment"
+  },
+  "received_at": "2024-05-05T12:00:00Z",
+  "payload": {
+    "action": "deleted",
+    "issue": {
+      "number": 875,
+      "title": "Improve document retrieval with hybrid retrieval",
+      "body": "Document RAG currently relies on dense vector retrieval only. Exact identifiers such as config keys and file names are missed. We should add BM25 keyword retrieval and fuse the two ranked lists with RRF instead of mixing incomparable scores.",
+      "state": "open",
+      "labels": [
+        {
+          "name": "enhancement"
+        },
+        {
+          "name": "good first issue"
+        }
+      ],
+      "user": {
+        "login": "maintainer-a"
+      },
+      "html_url": "https://github.com/trustgraph-ai/trustgraph/issues/875",
+      "created_at": "2024-04-02T09:00:00Z",
+      "updated_at": "2024-05-05T12:00:00Z"
+    },
+    "comment": {
+      "id": 7002,
+      "user": {
+        "login": "drive-by"
+      },
+      "body": "We should just run Elasticsearch next to it and let it do the lexical half.",
+      "html_url": "https://github.com/trustgraph-ai/trustgraph/issues/875#issuecomment-7002",
+      "created_at": "2024-05-04T08:30:00Z",
+      "updated_at": "2024-05-04T08:30:00Z"
+    },
+    "repository": {
+      "full_name": "trustgraph-ai/trustgraph"
+    }
+  },
+  "note": "The comment is deleted; facts inferred from it must be invalidated, not silently dropped."
+}

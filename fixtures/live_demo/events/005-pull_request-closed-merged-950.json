@@ -1,0 +1,36 @@
+{
+  "headers": {
+    "X-GitHub-Delivery": "d-0005",
+    "X-GitHub-Event": "pull_request"
+  },
+  "received_at": "2024-05-06T15:00:00Z",
+  "payload": {
+    "action": "closed",
+    "pull_request": {
+      "number": 950,
+      "title": "Fix Kafka consumer teardown deadlock",
+      "body": "Fixes #944.\n\nDrains the poll loop before calling unsubscribe(), so the poll loop no longer holds the partition assignment during teardown.",
+      "state": "closed",
+      "draft": false,
+      "merged": true,
+      "labels": [],
+      "user": {
+        "login": "contributor-c"
+      },
+      "html_url": "https://github.com/trustgraph-ai/trustgraph/pull/950",
+      "created_at": "2024-05-03T10:00:00Z",
+      "updated_at": "2024-05-06T15:00:00Z",
+      "merged_at": "2024-05-06T15:00:00Z",
+      "closed_at": "2024-05-06T15:00:00Z"
+    },
+    "repository": {
+      "full_name": "trustgraph-ai/trustgraph"
+    }
+  },
+  "attachments": {
+    "files": [
+      "trustgraph-base/trustgraph/base/kafka_backend.py",
+      "tests/test_kafka_backend.py"
+    ]
+  }
+}

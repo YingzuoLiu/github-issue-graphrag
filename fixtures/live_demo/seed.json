@@ -1,0 +1,58 @@
+{
+  "repo": "trustgraph-ai/trustgraph",
+  "note": "Synthetic snapshot. Issue numbers and themes mirror the batch demo so the two pipelines tell the same story, but the text is hand-authored, not fetched.",
+  "items": [
+    {
+      "kind": "issue",
+      "number": 875,
+      "title": "Improve document retrieval with hybrid retrieval",
+      "body": "Document RAG currently relies on dense vector retrieval only. Exact identifiers such as config keys and file names are missed. We should add BM25 keyword retrieval and fuse the two ranked lists with RRF instead of mixing incomparable scores.",
+      "state": "open",
+      "labels": ["enhancement", "good first issue"],
+      "author": "maintainer-a",
+      "url": "https://github.com/trustgraph-ai/trustgraph/issues/875",
+      "created_at": "2024-04-02T09:00:00Z",
+      "updated_at": "2024-04-20T09:00:00Z",
+      "comments": {}
+    },
+    {
+      "kind": "issue",
+      "number": 922,
+      "title": "graph-rag latency: sequential triples-query round trips",
+      "body": "tg-invoke-graph-rag is slow on wide traversals. graph_rag.Processor issues one triples-query call per hop over Pulsar, and each call round-trips to Memgraph. Latency grows linearly with hop count.",
+      "state": "open",
+      "labels": ["performance"],
+      "author": "maintainer-b",
+      "url": "https://github.com/trustgraph-ai/trustgraph/issues/922",
+      "created_at": "2024-04-11T11:30:00Z",
+      "updated_at": "2024-04-25T11:30:00Z",
+      "comments": {}
+    },
+    {
+      "kind": "issue",
+      "number": 944,
+      "title": "Kafka backend consumers hang on unsubscribe",
+      "body": "kafka_backend.py blocks forever when a Consumer is torn down. unsubscribe() appears to be the footgun: it is called while the poll loop still holds the partition assignment.",
+      "state": "open",
+      "labels": ["bug", "help wanted"],
+      "author": "contributor-c",
+      "url": "https://github.com/trustgraph-ai/trustgraph/issues/944",
+      "created_at": "2024-04-28T08:15:00Z",
+      "updated_at": "2024-04-28T08:15:00Z",
+      "comments": {}
+    },
+    {
+      "kind": "issue",
+      "number": 901,
+      "title": "Add integration tests for the Kafka backend",
+      "body": "There is no end-to-end coverage for Kafka consumer teardown. Blocked by #944 because the hang makes the suite unrunnable.",
+      "state": "open",
+      "labels": ["testing"],
+      "author": "maintainer-a",
+      "url": "https://github.com/trustgraph-ai/trustgraph/issues/901",
+      "created_at": "2024-04-05T14:00:00Z",
+      "updated_at": "2024-04-29T14:00:00Z",
+      "comments": {}
+    }
+  ]
+}
