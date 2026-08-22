@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -34,6 +34,11 @@ def max_iso(*values: str | None) -> str | None:
     if not known:
         return None
     return to_iso(max(parse_iso(v) for v in known))
+
+
+def next_iso(value: str) -> str:
+    """Advance the logical ingestion clock at its one-second storage precision."""
+    return to_iso(parse_iso(value) + timedelta(seconds=1))
 
 
 def is_before_or_equal(left: str, right: str) -> bool:

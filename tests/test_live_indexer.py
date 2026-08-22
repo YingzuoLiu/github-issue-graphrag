@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from conftest import make_event, issue_payload, pull_payload
 
 from issue_graphrag.live.contribution import opportunities
@@ -175,3 +177,23 @@ def test_state_survives_a_json_round_trip(seeded_state, demo_events, extractor, 
     assert signature(restored) == signature(seeded_state)
     assert restored.processed_deliveries == seeded_state.processed_deliveries
     assert len(restored.facts) == len(seeded_state.facts)
+
+
+def test_state_reader_migrates_record_versions_and_legacy_tombstones(
+    seeded_state, tmp_path
+):
+    """A state written by the first v0.2 commit remains readable after the fix."""
+    raw = seeded_state.model_dump()
+    item = raw["items"]["trustgraph-ai/trustgraph#issue-875"]
+    item.pop("field_versions")
+    item["deleted_comments"] = {"7": "2024-05-05T12:00:00Z"}
+
+    path = tmp_path / "legacy_state.json"
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(raw, handle)
+
+    restored = read_state(path)
+    migrated = restored.items["trustgraph-ai/trustgraph#issue-875"]
+
+    assert migrated.field_versions["title"].effective_at == migrated.effective_at
+    assert migrated.deleted_comments["7"].key() == ("2024-05-05T12:00:00Z", "")

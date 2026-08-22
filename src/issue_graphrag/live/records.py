@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from issue_graphrag.live.models import Comment, LiveState, RepoEvent, RepoItem
+from issue_graphrag.live.models import Comment, LiveState, RepoEvent, RepoItem, SourceVersion
 from issue_graphrag.live.timeutil import max_iso, to_iso
 
 #: Event types the incremental indexer knows how to apply.
@@ -81,54 +81,71 @@ def merge_item(
     delivery_id: str,
     files: list[str] | None = None,
 ) -> RepoItem:
-    """Apply only the fields a payload actually carries.
+    """Apply each present field when its own source version wins.
 
     A pull request comment arrives with issue-shaped fields: no ``merged``, no
     ``merged_at``, no ``draft``. Rebuilding the record from ``payload.get(...)``
-    would quietly demote a merged pull request to a plain closed one, so every
-    field is presence-checked and anything absent is inherited.
+    would quietly demote a merged pull request to a plain closed one. A single
+    record-wide stale guard is not enough either: two partial payloads can have
+    the same timestamp and must converge whichever one arrives first. Every
+    field therefore carries its own ``(effective_at, delivery_id)`` version.
     """
     number = int(payload["number"])
     item = (
         existing.model_copy(deep=True)
         if existing is not None
-        else RepoItem(kind="issue", repo=repo, number=number)
+        else RepoItem(kind=kind, repo=repo, number=number)
     )
+
+    incoming = SourceVersion(
+        effective_at=effective_at(payload) or "",
+        delivery_id=delivery_id,
+    )
+
+    def assign(field: str, value: Any) -> None:
+        previous = item.field_versions.get(field)
+        if previous is not None and incoming.key() < previous.key():
+            return
+        setattr(item, field, value)
+        item.field_versions[field] = incoming.model_copy()
 
     item.kind = "pull_request" if kind == "pull_request" else item.kind
     item.repo = repo
     item.number = number
 
     if "title" in payload:
-        item.title = str(payload.get("title") or "")
+        assign("title", str(payload.get("title") or ""))
     if "body" in payload:
-        item.body = str(payload.get("body") or "")
+        assign("body", str(payload.get("body") or ""))
     if "state" in payload:
-        item.state = str(payload.get("state") or "open")
+        assign("state", str(payload.get("state") or "open"))
     if "draft" in payload:
-        item.draft = bool(payload.get("draft"))
+        assign("draft", bool(payload.get("draft")))
     if "merged" in payload:
-        item.merged = bool(payload.get("merged"))
+        assign("merged", bool(payload.get("merged")))
     if "merged_at" in payload:
-        item.merged_at = _timestamp(payload.get("merged_at"))
-        item.merged = item.merged or item.merged_at is not None
+        merged_at = _timestamp(payload.get("merged_at"))
+        assign("merged_at", merged_at)
+        if merged_at is not None:
+            assign("merged", True)
     if "labels" in payload:
-        item.labels = _labels(payload)
+        assign("labels", _labels(payload))
     if "user" in payload:
-        item.author = _login(payload)
+        assign("author", _login(payload))
     if payload.get("html_url"):
-        item.url = payload["html_url"]
+        assign("url", payload["html_url"])
     if "created_at" in payload:
-        item.created_at = _timestamp(payload.get("created_at"))
+        assign("created_at", _timestamp(payload.get("created_at")))
     if "updated_at" in payload:
-        item.updated_at = _timestamp(payload.get("updated_at"))
+        assign("updated_at", _timestamp(payload.get("updated_at")))
     if "closed_at" in payload:
-        item.closed_at = _timestamp(payload.get("closed_at"))
+        assign("closed_at", _timestamp(payload.get("closed_at")))
     if files is not None:
-        item.files = sorted(files)
+        assign("files", sorted(files))
 
-    item.effective_at = effective_at(payload) or item.effective_at
-    item.source_delivery_id = delivery_id
+    if incoming.key() >= item.version_key():
+        item.effective_at = incoming.effective_at or item.effective_at
+        item.source_delivery_id = delivery_id
     return item
 
 
@@ -140,21 +157,20 @@ def upsert_item(
     delivery_id: str,
     files: list[str] | None = None,
 ) -> tuple[str, bool]:
-    """Store a payload unless it describes an older version than we already have.
+    """Merge a payload using independent source versions for every present field.
 
-    Ties on ``effective_at`` are broken by delivery id so that the outcome is the
-    same whichever order the two payloads arrive in.
+    Ties on ``effective_at`` are broken by delivery id. Because absent fields do
+    not participate, partial payloads converge instead of whichever whole
+    payload happened to arrive first winning the record.
     """
     number = int(payload["number"])
     document_id = _document_id(repo, kind, number)
     existing = state.items.get(document_id)
 
-    incoming_version = (effective_at(payload) or "", delivery_id)
-    if existing is not None and incoming_version < existing.version_key():
-        return document_id, False
-
-    state.items[document_id] = merge_item(existing, repo, payload, kind, delivery_id, files)
-    return document_id, True
+    before = existing.model_dump() if existing is not None else None
+    merged = merge_item(existing, repo, payload, kind, delivery_id, files)
+    state.items[document_id] = merged
+    return document_id, before != merged.model_dump()
 
 
 def upsert_comment(
@@ -178,7 +194,7 @@ def upsert_comment(
     )
 
     tombstone = item.deleted_comments.get(comment_id)
-    if tombstone and incoming.version_key()[0] <= tombstone:
+    if tombstone and incoming.version_key() <= tombstone.key():
         # The comment was deleted after this version was written.
         return False
 
@@ -195,6 +211,7 @@ def remove_comment(
     document_id: str,
     payload: dict[str, Any],
     deleted_at: str,
+    delivery_id: str,
 ) -> bool:
     """Delete a comment and remember that it was deleted.
 
@@ -203,9 +220,18 @@ def remove_comment(
     """
     item = state.items[document_id]
     comment_id = str(payload.get("id"))
+    deletion = SourceVersion(effective_at=deleted_at, delivery_id=delivery_id)
 
     previous = item.deleted_comments.get(comment_id)
-    item.deleted_comments[comment_id] = max_iso(previous, deleted_at) or deleted_at
+    if previous is not None and deletion.key() <= previous.key():
+        return False
+
+    current = item.comments.get(comment_id)
+    if current is not None and deletion.key() < current.version_key():
+        # The delete describes an older comment version than the edit we hold.
+        return False
+
+    item.deleted_comments[comment_id] = deletion
     return item.comments.pop(comment_id, None) is not None
 
 
@@ -247,8 +273,8 @@ def apply_event_to_records(state: LiveState, event: RepoEvent) -> list[str]:
         document_id, _ = upsert_item(state, repo, parent, kind, delivery)
 
         if event.action == "deleted":
-            deleted_at = effective_at(parent) or effective_at(comment) or event.received_at
-            remove_comment(state, document_id, comment, deleted_at)
+            deleted_at = max_iso(effective_at(comment), effective_at(parent)) or event.received_at
+            remove_comment(state, document_id, comment, deleted_at, delivery)
         else:
             upsert_comment(state, document_id, comment, delivery)
         return [document_id]
@@ -265,5 +291,6 @@ def seed_items(repo: str, records: list[dict[str, Any]]) -> dict[str, RepoItem]:
             item.effective_at = max_iso(
                 item.merged_at, item.closed_at, item.updated_at, item.created_at
             )
+        item.seed_field_versions()
         items[item.document_id] = item
     return items

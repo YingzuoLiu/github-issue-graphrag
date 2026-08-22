@@ -66,7 +66,7 @@ def reconstruct_delta(
         delivery_id=event.delivery_id,
         event_type=event.event_type,
         action=event.action,
-        occurred_at=moment,
+        occurred_at=event.received_at,
         indexed_at=moment,
         repo=event.repo,
         fact_changes=changes,

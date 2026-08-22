@@ -35,7 +35,7 @@ from issue_graphrag.live.ontology import validate_inferred
 from issue_graphrag.live.projection import diff_graphs, project_graph
 from issue_graphrag.live.records import UnsupportedEvent, apply_event_to_records
 from issue_graphrag.live.store import reconcile_facts
-from issue_graphrag.live.timeutil import max_iso, to_iso
+from issue_graphrag.live.timeutil import is_after, max_iso, next_iso, to_iso
 
 SEED_DELIVERY = "seed"
 REBUILD_DELIVERY = "rebuild"
@@ -70,8 +70,11 @@ class RecordedExtractor:
 
 
 def ingestion_moment(state: LiveState, event: RepoEvent) -> str:
-    """The index clock: monotonic, never earlier than what we already recorded."""
-    return max_iso(state.last_event_at, event.received_at) or event.received_at
+    """The index clock: strictly monotonic, so every event owns a history window."""
+    candidate = max_iso(state.last_event_at, event.received_at) or event.received_at
+    if state.last_event_at and not is_after(candidate, state.last_event_at):
+        return next_iso(state.last_event_at)
+    return candidate
 
 
 def refresh_deterministic(state: LiveState, moment: str, delivery_id: str) -> list[FactChange]:

@@ -90,4 +90,10 @@ def write_state(path: Path, state: LiveState) -> None:
 
 def read_state(path: Path) -> LiveState:
     with path.open("r", encoding="utf-8") as handle:
-        return LiveState.model_validate(json.load(handle))
+        state = LiveState.model_validate(json.load(handle))
+    for item in state.items.values():
+        # States written before per-field source versions were introduced came
+        # from complete snapshots/records, so all of their fields share the
+        # record-level version as the migration baseline.
+        item.seed_field_versions()
+    return state

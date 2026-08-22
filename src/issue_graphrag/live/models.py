@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from issue_graphrag.live.timeutil import is_after, is_before_or_equal
 
@@ -106,6 +106,33 @@ class Comment(BaseModel):
         return (self.updated_at or self.created_at or "", self.source_delivery_id)
 
 
+class SourceVersion(BaseModel):
+    """Deterministic source-side ordering for one field or tombstone."""
+
+    effective_at: str = ""
+    delivery_id: str = ""
+
+    def key(self) -> tuple[str, str]:
+        return (self.effective_at, self.delivery_id)
+
+
+VERSIONED_ITEM_FIELDS = (
+    "title",
+    "body",
+    "state",
+    "draft",
+    "merged",
+    "merged_at",
+    "labels",
+    "author",
+    "url",
+    "created_at",
+    "updated_at",
+    "closed_at",
+    "files",
+)
+
+
 class RepoItem(BaseModel):
     """An issue or pull request as currently known to the live index."""
 
@@ -133,12 +160,43 @@ class RepoItem(BaseModel):
     effective_at: str | None = None
     #: Tie-breaker when two payloads claim the same effective_at.
     source_delivery_id: str = ""
-    #: Comment id -> the effective time it was deleted. A late-arriving create
-    #: or edit for a deleted comment must not resurrect it.
-    deleted_comments: dict[str, str] = Field(default_factory=dict)
+    #: Per-field source versions. Webhook shapes are partial, so one record-wide
+    #: stale guard is insufficient: a comment-shaped PR payload must not prevent
+    #: an equally-timestamped pull_request payload from filling PR-only fields.
+    field_versions: dict[str, SourceVersion] = Field(default_factory=dict)
+    #: Comment id -> the source version that deleted it. Comparing the complete
+    #: version prevents a stale delete from erasing a newer edit.
+    deleted_comments: dict[str, SourceVersion] = Field(default_factory=dict)
+
+    @field_validator("deleted_comments", mode="before")
+    @classmethod
+    def migrate_timestamp_tombstones(cls, value):  # noqa: ANN001 - Pydantic hook
+        """Read states written before tombstones carried a delivery-id tie-break."""
+        if not isinstance(value, dict):
+            return value
+        return {
+            comment_id: (
+                {"effective_at": tombstone, "delivery_id": ""}
+                if isinstance(tombstone, str)
+                else tombstone
+            )
+            for comment_id, tombstone in value.items()
+        }
 
     def version_key(self) -> tuple[str, str]:
         return (self.effective_at or "", self.source_delivery_id)
+
+    def seed_field_versions(self) -> None:
+        """Mark every field in a complete snapshot as observed at its record version."""
+        if self.field_versions:
+            return
+        version = SourceVersion(
+            effective_at=self.effective_at or "",
+            delivery_id=self.source_delivery_id,
+        )
+        self.field_versions = {
+            field: version.model_copy() for field in VERSIONED_ITEM_FIELDS
+        }
 
     @property
     def document_id(self) -> str:

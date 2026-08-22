@@ -295,13 +295,14 @@ derived from can also be overwritten out of order. So the index keeps two clocks
 | Clock | What it is | What it decides |
 |---|---|---|
 | `effective_at` | the newest timestamp GitHub reports for a record | which payload wins; an older payload can never overwrite newer state, whenever it arrives |
-| ingestion time | when the index applied a delivery, forced monotonic | when a fact's validity window opens |
+| ingestion time | when the index applied a delivery, forced strictly monotonic | when a fact's validity window opens |
 
-Ties on `effective_at` are broken by delivery id, so two payloads stamped the same second resolve
-the same way in either arrival order. Deleted comments leave a tombstone, so a late `created`
-delivery cannot resurrect one. The result is that applying a set of deliveries in *any* order
-converges on the same records and the same graph — which is a test, not a hope
-(`test_out_of_order_deliveries_converge_on_the_same_graph`).
+Every present field carries its own `(effective_at, delivery_id)` source version. Ties resolve the
+same way in either arrival order without letting one partial payload hide fields that only another
+webhook shape carries. Deleted comments leave a versioned tombstone: a late `created` cannot
+resurrect a deletion, while an old delayed `deleted` event cannot erase a newer edit. The result is
+that applying a set of deliveries in *any* order converges on the same records and the same graph —
+which is a test, not a hope (`test_out_of_order_deliveries_converge_on_the_same_graph`).
 
 A partial payload is merged field by field rather than rebuilt wholesale. This matters more than it
 sounds: GitHub delivers pull request comments under the `issue` key, with no `merged`, `merged_at`
@@ -464,6 +465,9 @@ properties that make the word "temporal" honest:
 | A stale payload cannot rewind state | `test_a_stale_payload_cannot_rewind_state` |
 | A comment on a merged pull request keeps it merged | `test_a_comment_on_a_merged_pull_request_keeps_it_merged` |
 | A deleted comment is not resurrected by a late create | `test_a_deleted_comment_is_not_resurrected_by_a_late_create` |
+| A stale delete cannot erase a newer comment edit | `test_a_stale_delete_cannot_remove_a_newer_comment_edit` |
+| Same-timestamp partial PR payloads converge in either order | `test_same_timestamp_partial_pr_payloads_converge_in_either_order` |
+| Same-second events keep distinct history windows | `test_events_received_in_the_same_second_get_distinct_history_windows` |
 | The fingerprint can actually fail, on direction and on evidence | `test_signature_distinguishes_edge_direction`, `test_signature_distinguishes_evidence` |
 | Same-named files in different directories stay separate | `test_same_named_files_in_different_directories_stay_separate` |
 | A closing keyword in an issue is a reference, not a close | `test_a_closing_keyword_in_an_issue_is_a_reference_not_a_close` |

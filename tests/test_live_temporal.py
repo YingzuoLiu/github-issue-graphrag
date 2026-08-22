@@ -7,7 +7,7 @@ import random
 from conftest import REPO, issue_payload, make_event, pull_payload
 
 from issue_graphrag.live.extraction import FixtureExtractor
-from issue_graphrag.live.indexer import apply_event, bootstrap, rebuild, replay
+from issue_graphrag.live.indexer import NullExtractor, apply_event, bootstrap, rebuild, replay
 from issue_graphrag.live.models import Evidence, Fact, LiveState
 from issue_graphrag.live.projection import alias_map, graph_signature, project_graph
 from issue_graphrag.live.records import seed_items
@@ -323,6 +323,121 @@ def test_a_deleted_comment_is_not_resurrected_by_a_late_create(seeded_state, ext
     ), extractor)
 
     assert seeded_state.items[f"{REPO}#issue-875"].comments == {}
+
+
+def test_a_stale_delete_cannot_remove_a_newer_comment_edit(seeded_state, extractor):
+    """A delayed delete carries the old comment version and must not erase a newer edit."""
+    original = {
+        "id": 8,
+        "body": "first draft",
+        "user": {"login": "a"},
+        "created_at": "2024-05-04T08:30:00Z",
+        "updated_at": "2024-05-04T08:30:00Z",
+    }
+    edited = {
+        **original,
+        "body": "newer edit",
+        "updated_at": "2024-05-06T08:30:00Z",
+    }
+
+    apply_event(seeded_state, make_event(
+        "d-create", "issue_comment",
+        {"action": "created", "issue": issue_payload(
+            875, updated_at="2024-05-04T08:30:00Z"), "comment": original},
+        "2024-05-04T08:30:00Z",
+    ), extractor)
+    apply_event(seeded_state, make_event(
+        "d-edit", "issue_comment",
+        {"action": "edited", "issue": issue_payload(
+            875, updated_at="2024-05-06T08:30:00Z"), "comment": edited},
+        "2024-05-06T08:30:00Z",
+    ), extractor)
+
+    # This delivery arrives last, but its source payload predates the edit.
+    apply_event(seeded_state, make_event(
+        "d-stale-delete", "issue_comment",
+        {"action": "deleted", "issue": issue_payload(
+            875, updated_at="2024-05-05T12:00:00Z"), "comment": original},
+        "2024-05-07T09:00:00Z",
+    ), extractor)
+
+    item = seeded_state.items[f"{REPO}#issue-875"]
+    assert item.comments["8"].body == "newer edit"
+    assert "8" not in item.deleted_comments
+
+
+def test_same_timestamp_partial_pr_payloads_converge_in_either_order():
+    """Field-wise versions keep a comment snapshot from hiding PR-only fields."""
+    moment = "2024-05-06T15:00:00Z"
+    pull = make_event(
+        "a-pull", "pull_request",
+        {"action": "closed", "pull_request": pull_payload(
+            953, state="closed", merged=True, merged_at=moment, updated_at=moment)},
+        moment,
+        attachments={"files": ["src/merged.py"]},
+    )
+    comment = make_event(
+        "z-comment", "issue_comment",
+        {
+            "action": "created",
+            "issue": {
+                **issue_payload(
+                    953,
+                    title="PR 953",
+                    state="closed",
+                    updated_at=moment,
+                    html_url=f"https://github.com/{REPO}/pull/953",
+                ),
+                "pull_request": {"url": "https://api.github.com/pulls/953"},
+            },
+            "comment": {
+                "id": 9,
+                "body": "ship it",
+                "user": {"login": "a"},
+                "created_at": moment,
+            },
+        },
+        moment,
+    )
+
+    states = []
+    for events in ([pull, comment], [comment, pull]):
+        state = LiveState(repo=REPO)
+        replay(state, [event.model_copy(deep=True) for event in events], NullExtractor())
+        states.append(state)
+
+    assert graph_signature(project_graph(states[0])) == graph_signature(project_graph(states[1]))
+    for state in states:
+        item = state.items[f"{REPO}#pull-953"]
+        assert item.lifecycle_state() == "merged"
+        assert item.files == ["src/merged.py"]
+        assert item.comments["9"].body == "ship it"
+
+
+def test_events_received_in_the_same_second_get_distinct_history_windows(
+    seeded_state, extractor
+):
+    """A timeline must retain the intermediate graph even at second precision."""
+    moment = "2024-05-09T09:00:00Z"
+    closed = make_event(
+        "d-close", "issues",
+        {"action": "closed", "issue": issue_payload(
+            944, state="closed", closed_at=moment, updated_at=moment)},
+        moment,
+    )
+    reopened = make_event(
+        "d-reopen", "issues",
+        {"action": "reopened", "issue": issue_payload(
+            944, state="open", closed_at=None, updated_at=moment)},
+        moment,
+    )
+
+    first = apply_event(seeded_state, closed, extractor)
+    second = apply_event(seeded_state, reopened, extractor)
+
+    assert first.indexed_at < second.indexed_at
+    assert project_graph(seeded_state, first.indexed_at).nodes["Issue #944"]["state"] == "closed"
+    assert project_graph(seeded_state, second.indexed_at).nodes["Issue #944"]["state"] == "open"
 
 
 # --------------------------------------------------------------------------
