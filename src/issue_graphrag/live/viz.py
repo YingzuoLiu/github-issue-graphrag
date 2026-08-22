@@ -67,8 +67,11 @@ def subgraph_dot(graph: nx.Graph, title: str | None = None) -> str:
         style = CHANGE_STYLE.get(data.get("change", "unchanged"), CHANGE_STYLE["unchanged"])
         # One row per asserting fact, so the same triple appears once per document
         # that stated it. That distinction matters to the fingerprint, but drawing
-        # it would stack identical parallel arrows on top of each other.
-        directed = _distinct_relations(data.get("directed_relations") or [])
+        # it would stack identical parallel arrows on top of each other. Origin is
+        # deliberately not part of the identity here: every arrow attribute below
+        # comes from the row's triple or from edge-level data, so two rows that
+        # differ only by origin would render as two identical arrows.
+        directed = distinct_relations(data.get("directed_relations") or [])
         inferred_only = data.get("origins") == ["llm"]
         for row in directed or [{"source": source, "target": target, "relation": "related_to"}]:
             lines.append(
@@ -82,12 +85,28 @@ def subgraph_dot(graph: nx.Graph, title: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def _distinct_relations(rows: list[dict]) -> list[dict]:
-    """Collapse rows that differ only by which document asserted them."""
-    seen: set[tuple[str, str, str]] = set()
+def distinct_relations(rows: list[dict], *, include_origin: bool = False) -> list[dict]:
+    """Collapse projection rows that would render identically.
+
+    ``project_graph`` stores one ``directed_relations`` row per asserting fact,
+    because ``graph_signature`` fingerprints the asserting document. A renderer
+    that copies that row-per-fact shape shows the same triple more than once.
+
+    Whether ``origin`` belongs in the identity depends on the renderer, so the
+    caller states it rather than the helper guessing:
+
+    - The DOT view draws solid-vs-dashed from edge-level ``origins``, so nothing
+      in an arrow varies with the row's origin. ``include_origin=False`` there.
+    - ``contribution_report.py --explain`` prints a per-row ``[github]`` or
+      ``[inferred]`` marker, so dropping origin from the identity would hide a
+      GitHub assertion behind an inferred one. ``include_origin=True`` there.
+    """
+    seen: set[tuple[str, ...]] = set()
     unique: list[dict] = []
     for row in rows:
         key = (str(row["source"]), str(row["relation"]), str(row["target"]))
+        if include_origin:
+            key += (str(row["origin"]),)
         if key in seen:
             continue
         seen.add(key)

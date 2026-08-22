@@ -231,9 +231,9 @@ Create and activate a virtual environment:
 ```bash
 python -m venv .venv
 
-source .venv/bin/activate       # macOS / Linux
-.venv\Scripts\activate          # Windows PowerShell
-source .venv/Scripts/activate   # Windows Git Bash
+source .venv/bin/activate         # macOS / Linux
+.\.venv\Scripts\Activate.ps1      # Windows PowerShell
+source .venv/Scripts/activate     # Windows Git Bash
 ```
 
 Install. The base install is enough for the fixture replay, the graph inspection scripts and the

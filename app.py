@@ -16,7 +16,7 @@ from issue_graphrag.retrieval.global_search import global_search
 from issue_graphrag.retrieval.local_search import local_search
 from issue_graphrag.retrieval.naive_search import naive_search
 from issue_graphrag.retrieval.router import route_query
-from issue_graphrag.storage.json_store import read_graph, read_json
+from issue_graphrag.storage.json_store import missing_batch_index, read_graph, read_json
 
 
 ANSWER_PROMPT = """
@@ -51,15 +51,6 @@ def load_processed_data():
     reports = [CommunityReport.model_validate(x) for x in read_json(processed / "community_reports.json")]
 
     return graph, text_units, reports
-
-
-BATCH_INDEX_FILES = ("graph.json", "text_units.json", "community_reports.json")
-
-
-def missing_batch_index() -> list[str]:
-    """Batch-index files that have not been built yet, in load order."""
-    processed = load_settings().processed_data_dir
-    return [name for name in BATCH_INDEX_FILES if not (processed / name).exists()]
 
 
 @st.cache_data(show_spinner=False)
@@ -120,7 +111,7 @@ def retrieve_context(mode: str, question: str, graph, text_units, reports):
 
 
 def render_ask_tab(mode: str, generate_answer: bool, show_context: bool, question: str) -> None:
-    missing = missing_batch_index()
+    missing = missing_batch_index(load_settings().processed_data_dir)
     if missing:
         # The live tab works straight from a clone; the batch index does not, so
         # say which file is absent instead of raising FileNotFoundError at the
