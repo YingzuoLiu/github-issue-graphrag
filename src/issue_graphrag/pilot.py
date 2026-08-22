@@ -18,6 +18,7 @@ import requests
 
 from issue_graphrag.ingest.github_loader import parse_repo, to_seed_item
 from issue_graphrag.live.contribution import HELP_LABELS, opportunities
+from issue_graphrag.live.facts import github_closing_numbers, github_reference_numbers
 from issue_graphrag.live.indexer import NullExtractor, bootstrap
 from issue_graphrag.live.models import Opportunity
 from issue_graphrag.live.projection import project_graph
@@ -29,15 +30,8 @@ DEFAULT_PILOT_REPOS = (
     "pydantic/pydantic-ai",
     "trustgraph-ai/trustgraph",
 )
-DEFAULT_FALSE_AVAILABLE_THRESHOLD = 0.05
+DEFAULT_CONSTRAINT_CONTRADICTION_THRESHOLD = 0.05
 
-_TARGET = r"(?:(?P<repo>[\w.-]+/[\w.-]+))?#(?P<number>\d+)\b"
-_REFERENCE = re.compile(rf"(?<![\w#]){_TARGET}")
-_CLOSING = re.compile(
-    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]*"
-    + _TARGET,
-    re.IGNORECASE,
-)
 _ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)$")
 
 
@@ -49,6 +43,7 @@ class PilotSnapshot:
     recent_comments: list[dict[str, Any]]
     seed: dict[str, Any]
     request_count: int
+    write_request_count: int
     fingerprint: str
 
     @property
@@ -60,8 +55,55 @@ class PilotSnapshot:
         return [item for item in self.raw_items if "pull_request" in item]
 
 
+class CountingSession:
+    """Count read and non-GET requests at the HTTP boundary.
+
+    The write count is intentionally attached to the session instead of being
+    a report literal. A later POST/PUT/PATCH/DELETE therefore makes the
+    read-only check fail even if a caller forgets to update the evaluator.
+    """
+
+    def __init__(self, session: Any):
+        self._session = session
+        self.read_count = 0
+        self.write_count = 0
+
+    def _count(self, method: str) -> None:
+        if method.upper() == "GET":
+            self.read_count += 1
+        else:
+            self.write_count += 1
+
+    def request(self, method: str, url: str, **kwargs: Any) -> Any:
+        self._count(method)
+        return self._session.request(method, url, **kwargs)
+
+    def get(self, url: str, **kwargs: Any) -> Any:
+        self._count("GET")
+        return self._session.get(url, **kwargs)
+
+    def post(self, url: str, **kwargs: Any) -> Any:
+        self._count("POST")
+        return self._session.post(url, **kwargs)
+
+    def put(self, url: str, **kwargs: Any) -> Any:
+        self._count("PUT")
+        return self._session.put(url, **kwargs)
+
+    def patch(self, url: str, **kwargs: Any) -> Any:
+        self._count("PATCH")
+        return self._session.patch(url, **kwargs)
+
+    def delete(self, url: str, **kwargs: Any) -> Any:
+        self._count("DELETE")
+        return self._session.delete(url, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._session, name)
+
+
 class GitHubPilotClient:
-    """A GET-only GitHub client with an explicit request budget."""
+    """A read-only GitHub client whose HTTP method counts are auditable."""
 
     def __init__(
         self,
@@ -72,9 +114,16 @@ class GitHubPilotClient:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self.token = token
-        self.session = session or requests.Session()
+        self.session = CountingSession(session or requests.Session())
         self.timeout_seconds = timeout_seconds
-        self.request_count = 0
+
+    @property
+    def request_count(self) -> int:
+        return self.session.read_count
+
+    @property
+    def write_request_count(self) -> int:
+        return self.session.write_count
 
     def _get_list(self, url: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         headers = {
@@ -84,7 +133,6 @@ class GitHubPilotClient:
         }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        self.request_count += 1
         response = self.session.get(
             url,
             headers=headers,
@@ -118,6 +166,7 @@ class GitHubPilotClient:
             raise ValueError("comment_limit must be between 0 and 100")
 
         start_requests = self.request_count
+        start_write_requests = self.write_request_count
         selected: list[dict[str, Any]] = []
         issue_count = 0
         pull_count = 0
@@ -174,6 +223,7 @@ class GitHubPilotClient:
             comments,
             fetched_at=fetched_at or to_iso(now_utc()),
             request_count=self.request_count - start_requests,
+            write_request_count=self.write_request_count - start_write_requests,
         )
 
 
@@ -211,8 +261,9 @@ def make_snapshot(
     recent_comments: list[dict[str, Any]],
     fetched_at: str,
     request_count: int,
+    write_request_count: int = 0,
 ) -> PilotSnapshot:
-    """Build the same seed used by the live index while retaining oracle signals."""
+    """Build the same seed used by the live index while retaining platform signals."""
     parse_repo(repo)
     comments_by_number: dict[int, list[dict[str, Any]]] = {}
     for comment in recent_comments:
@@ -241,6 +292,7 @@ def make_snapshot(
         recent_comments=recent_comments,
         seed=seed,
         request_count=request_count,
+        write_request_count=write_request_count,
         fingerprint=_fingerprint_payload(seed, raw_items),
     )
 
@@ -268,13 +320,6 @@ def _blocked_by_count(raw: dict[str, Any]) -> int:
     return int(summary.get("blocked_by") or summary.get("total_blocked_by") or 0)
 
 
-def _local_number(repo: str, match: re.Match[str]) -> int | None:
-    qualifier = match.group("repo")
-    if qualifier and qualifier.casefold() != repo.casefold():
-        return None
-    return int(match.group("number"))
-
-
 def _pr_links(snapshot: PilotSnapshot) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
     issue_numbers = {int(raw["number"]) for raw in snapshot.issues}
     strong: dict[int, list[int]] = {}
@@ -282,16 +327,11 @@ def _pr_links(snapshot: PilotSnapshot) -> tuple[dict[int, list[int]], dict[int, 
     for pull in snapshot.pulls:
         pull_number = int(pull["number"])
         text = f"{pull.get('title') or ''}\n{pull.get('body') or ''}"
-        strong_numbers = {
-            number
-            for match in _CLOSING.finditer(text)
-            if (number := _local_number(snapshot.repo, match)) is not None
-        }
-        reference_numbers = {
-            number
-            for match in _REFERENCE.finditer(text)
-            if (number := _local_number(snapshot.repo, match)) is not None
-        }
+        # These intentionally use the production parser. Closing-PR labels are
+        # therefore an integration-consistency signal, not independent truth
+        # about the parser's accuracy.
+        strong_numbers = github_closing_numbers(text, snapshot.repo)
+        reference_numbers = github_reference_numbers(text, snapshot.repo)
         for number in sorted(strong_numbers & issue_numbers):
             strong.setdefault(number, []).append(pull_number)
         for number in sorted((reference_numbers - strong_numbers) & issue_numbers):
@@ -299,7 +339,7 @@ def _pr_links(snapshot: PilotSnapshot) -> tuple[dict[int, list[int]], dict[int, 
     return strong, weak
 
 
-def _oracle_reasons(raw: dict[str, Any], strong_claims: list[int]) -> list[str]:
+def _constraint_reasons(raw: dict[str, Any], strong_claims: list[int]) -> list[str]:
     reasons: list[str] = []
     assignees = _assignees(raw)
     if assignees:
@@ -316,24 +356,27 @@ def _oracle_reasons(raw: dict[str, Any], strong_claims: list[int]) -> list[str]:
 
 def _ranking_metrics(
     numbers: list[int],
-    actionable: set[int],
+    constraint_clear: set[int],
     top_k: int,
     target_choices: int = 3,
 ) -> dict[str, Any]:
     top = numbers[:top_k]
-    precision = sum(number in actionable for number in top) / len(top) if top else None
+    # Missing slots count as misses. Otherwise a product returning a single
+    # perfect candidate would report the same P@10 as one returning ten.
+    precision = sum(number in constraint_clear for number in top) / top_k
     found = 0
     inspections: int | None = None
     for rank, number in enumerate(numbers, start=1):
-        if number in actionable:
+        if number in constraint_clear:
             found += 1
             if found == target_choices:
                 inspections = rank
                 break
     return {
         "candidate_count": len(numbers),
-        "precision_at_k": round(precision, 4) if precision is not None else None,
-        "inspections_for_three_actionable": inspections,
+        "returned_at_k": len(top),
+        "constraint_clear_precision_at_k": round(precision, 4),
+        "inspections_for_three_constraint_clear": inspections,
         "top_numbers": top,
     }
 
@@ -342,7 +385,7 @@ def _issue_summary(
     raw: dict[str, Any],
     status: str | None,
     score: float | None,
-    oracle_reasons: list[str],
+    constraint_reasons: list[str],
 ) -> dict[str, Any]:
     return {
         "number": int(raw["number"]),
@@ -352,8 +395,8 @@ def _issue_summary(
         "assignees": _assignees(raw),
         "system_status": status,
         "system_score": score,
-        "oracle_actionable": not oracle_reasons,
-        "oracle_reasons": oracle_reasons,
+        "platform_constraint_clear": not constraint_reasons,
+        "platform_constraint_reasons": constraint_reasons,
     }
 
 
@@ -371,13 +414,21 @@ def _rank_snapshot(
 def evaluate_snapshot(
     snapshot: PilotSnapshot,
     top_k: int = 10,
-    false_available_threshold: float = DEFAULT_FALSE_AVAILABLE_THRESHOLD,
+    constraint_contradiction_threshold: float = (
+        DEFAULT_CONSTRAINT_CONTRADICTION_THRESHOLD
+    ),
 ) -> dict[str, Any]:
-    """Compare current ranking output with independent, explicit GitHub signals."""
+    """Check ranking consistency with explicit GitHub platform constraints.
+
+    This is deliberately not called an independent oracle. Assignee facts and
+    closing-keyword links overlap production behavior; lock and native
+    dependency fields are the only platform constraints not modeled by the
+    current product.
+    """
     if top_k < 1:
         raise ValueError("top_k must be positive")
-    if not 0 <= false_available_threshold <= 1:
-        raise ValueError("false_available_threshold must be between 0 and 1")
+    if not 0 <= constraint_contradiction_threshold <= 1:
+        raise ValueError("constraint_contradiction_threshold must be between 0 and 1")
 
     ranked = _rank_snapshot(snapshot, include_assignees=True)
     without_assignee_facts = _rank_snapshot(snapshot, include_assignees=False)
@@ -386,10 +437,10 @@ def evaluate_snapshot(
     strong_claims, weak_claims = _pr_links(snapshot)
 
     reasons_by_number = {
-        number: _oracle_reasons(raw, strong_claims.get(number, []))
+        number: _constraint_reasons(raw, strong_claims.get(number, []))
         for number, raw in raw_by_number.items()
     }
-    actionable = {
+    constraint_clear = {
         number for number, reasons in reasons_by_number.items() if not reasons
     }
 
@@ -409,28 +460,32 @@ def evaluate_snapshot(
         int(raw["number"]) for raw in unassigned if int(raw["number"]) not in help_numbers
     ]
 
-    false_available_numbers = [
+    contradiction_numbers = [
         number for number in product_numbers if reasons_by_number.get(number)
     ]
-    false_available_rate = (
-        len(false_available_numbers) / len(product_numbers) if product_numbers else None
+    contradiction_rate = (
+        len(contradiction_numbers) / len(product_numbers) if product_numbers else None
     )
-    ablation_false_numbers = [
+    ablation_contradiction_numbers = [
         number for number in ablation_numbers if reasons_by_number.get(number)
     ]
-    ablation_false_rate = (
-        len(ablation_false_numbers) / len(ablation_numbers) if ablation_numbers else None
+    ablation_contradiction_rate = (
+        len(ablation_contradiction_numbers) / len(ablation_numbers)
+        if ablation_numbers
+        else None
     )
 
     product_set = set(product_numbers)
-    returned_actionable = product_set & actionable
-    actionable_coverage = (
-        len(returned_actionable) / len(actionable) if actionable else None
+    returned_constraint_clear = product_set & constraint_clear
+    constraint_clear_coverage = (
+        len(returned_constraint_clear) / len(constraint_clear)
+        if constraint_clear
+        else None
     )
-    unreturned_actionable = [
+    unreturned_constraint_clear = [
         item.number
         for item in ranked
-        if item.number in actionable and item.number not in product_set
+        if item.number in constraint_clear and item.number not in product_set
     ]
 
     causal_evidence = [
@@ -450,33 +505,35 @@ def evaluate_snapshot(
         and weak_claims.get(number)
     ]
 
-    product_metrics = _ranking_metrics(product_numbers, actionable, top_k)
-    ablation_metrics = _ranking_metrics(ablation_numbers, actionable, top_k)
+    product_metrics = _ranking_metrics(product_numbers, constraint_clear, top_k)
+    ablation_metrics = _ranking_metrics(ablation_numbers, constraint_clear, top_k)
     ablation_metrics.update(
         {
-            "false_available_count": len(ablation_false_numbers),
-            "false_available_rate": (
-                round(ablation_false_rate, 4)
-                if ablation_false_rate is not None
+            "platform_constraint_contradiction_count": len(
+                ablation_contradiction_numbers
+            ),
+            "platform_constraint_contradiction_rate": (
+                round(ablation_contradiction_rate, 4)
+                if ablation_contradiction_rate is not None
                 else None
             ),
         }
     )
-    recent_metrics = _ranking_metrics(recent_numbers, actionable, top_k)
-    curated_metrics = _ranking_metrics(curated_numbers, actionable, top_k)
-    false_rate_pass = (
-        false_available_rate is not None
-        and false_available_rate <= false_available_threshold
+    recent_metrics = _ranking_metrics(recent_numbers, constraint_clear, top_k)
+    curated_metrics = _ranking_metrics(curated_numbers, constraint_clear, top_k)
+    contradiction_rate_pass = (
+        contradiction_rate is not None
+        and contradiction_rate <= constraint_contradiction_threshold
     )
 
-    false_examples = [
+    contradiction_examples = [
         _issue_summary(
             raw_by_number[number],
             by_number[number].status if number in by_number else None,
             by_number[number].score if number in by_number else None,
             reasons_by_number[number],
         )
-        for number in false_available_numbers[:10]
+        for number in contradiction_numbers[:10]
     ]
     top_product = [
         _issue_summary(
@@ -516,11 +573,11 @@ def evaluate_snapshot(
             ],
             "known_open_pr_plain_references": weak_claims.get(number, []),
             "review_note": (
-                "explicit GitHub oracle found no unavailable signal; conservative system "
-                "evidence needs human review"
+                "no sampled platform constraint fired; conservative system evidence is an "
+                "optional future-review candidate"
             ),
         }
-        for number in unreturned_actionable[:10]
+        for number in unreturned_constraint_clear[:10]
         if number in raw_by_number and number in by_number
     ]
 
@@ -533,7 +590,7 @@ def evaluate_snapshot(
             "open_pull_requests": len(snapshot.pulls),
             "recent_comments": len(snapshot.recent_comments),
             "github_read_requests": snapshot.request_count,
-            "github_write_requests": 0,
+            "github_write_requests": snapshot.write_request_count,
             "reported_comment_count_on_sampled_items": sum(
                 int(raw.get("comments") or 0) for raw in snapshot.raw_items
             ),
@@ -542,45 +599,54 @@ def evaluate_snapshot(
             status: sum(item.status == status for item in ranked)
             for status in ("available", "claimed", "blocked")
         },
-        "oracle": {
-            "actionable": len(actionable),
-            "explicitly_unavailable": len(raw_by_number) - len(actionable),
+        "platform_constraints": {
+            "clear": len(constraint_clear),
+            "flagged": len(raw_by_number) - len(constraint_clear),
             "assigned": sum(bool(_assignees(raw)) for raw in snapshot.issues),
             "locked": sum(bool(raw.get("locked")) for raw in snapshot.issues),
             "blocked_by_dependency": sum(_blocked_by_count(raw) > 0 for raw in snapshot.issues),
             "claimed_by_closing_pr": len(strong_claims),
+            "measurement_basis": {
+                "raw_github_fields": [
+                    "assignees",
+                    "locked",
+                    "issue_dependencies_summary",
+                ],
+                "shared_production_parser": ["pull request closing-keyword references"],
+            },
         },
         "metrics": {
             "product_available_ranking": product_metrics,
             "without_assignee_fact_ablation": ablation_metrics,
             "github_recent_open_baseline": recent_metrics,
             "github_unassigned_curated_baseline": curated_metrics,
-            "false_available_count": len(false_available_numbers),
-            "false_available_rate": (
-                round(false_available_rate, 4) if false_available_rate is not None else None
+            "platform_constraint_contradiction_count": len(contradiction_numbers),
+            "platform_constraint_contradiction_rate": (
+                round(contradiction_rate, 4) if contradiction_rate is not None else None
             ),
             "causal_evidence_url_coverage": round(evidence_coverage, 4),
             "ambiguous_plain_reference_claims": len(ambiguous_claims),
-            "oracle_actionable_coverage": (
-                round(actionable_coverage, 4) if actionable_coverage is not None else None
+            "constraint_clear_coverage": (
+                round(constraint_clear_coverage, 4)
+                if constraint_clear_coverage is not None
+                else None
             ),
-            "oracle_actionable_not_returned_count": len(unreturned_actionable),
+            "constraint_clear_not_returned_count": len(unreturned_constraint_clear),
         },
-        "precommitted_checks": {
-            "false_available_rate_at_most": false_available_threshold,
-            "false_available_rate_pass": false_rate_pass,
+        "engineering_checks": {
+            "constraint_contradiction_rate_at_most": constraint_contradiction_threshold,
+            "constraint_contradiction_rate_pass": contradiction_rate_pass,
             "all_non_available_results_have_causal_evidence_url": evidence_coverage == 1.0,
-            "github_write_requests_are_zero": True,
-            "beats_recent_baseline_at_top_k": (
-                product_metrics["precision_at_k"] is not None
-                and recent_metrics["precision_at_k"] is not None
-                and product_metrics["precision_at_k"] > recent_metrics["precision_at_k"]
+            "github_write_requests_are_zero": snapshot.write_request_count == 0,
+            "higher_constraint_clear_precision_than_recent_at_k": (
+                product_metrics["constraint_clear_precision_at_k"]
+                > recent_metrics["constraint_clear_precision_at_k"]
             ),
         },
         "top_product_candidates": top_product,
-        "false_available_examples": false_examples,
+        "platform_constraint_contradiction_examples": contradiction_examples,
         "ambiguous_claim_examples": ambiguous_examples,
-        "oracle_actionable_not_returned_examples": unreturned_examples,
+        "constraint_clear_not_returned_examples": unreturned_examples,
     }
 
 
@@ -589,15 +655,16 @@ def render_markdown(results: list[dict[str, Any]], top_k: int) -> str:
     lines = [
         "# Real-repository contribution pilot",
         "",
-        "Pilot 0 is a read-only engineering evaluation, not a user study. It tests contradictions",
-        "against explicit GitHub facts and two inspection-burden proxies. It does **not** prove that",
-        "contributors work faster or that maintainers perceive less burden.",
+        "Pilot 0 is a read-only engineering consistency and coverage evaluation, not a user study",
+        "or an independent recommendation-quality benchmark. It does **not** prove that contributors",
+        "work faster or that maintainers perceive less burden.",
         "",
         "## Summary",
         "",
         (
-            f"| repository | issues | PRs | API GETs | false available | product P@{top_k} | "
-            f"actionable coverage | recent P@{top_k} | curated P@{top_k} |"
+            f"| repository | issues | PRs | API GETs | available ∩ constrained | "
+            f"product clear P@{top_k} | clear coverage | recent clear P@{top_k} | "
+            f"curated clear P@{top_k} |"
         ),
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
@@ -608,36 +675,52 @@ def render_markdown(results: list[dict[str, Any]], top_k: int) -> str:
             f"| [{result['repo']}](https://github.com/{result['repo']}) | "
             f"{collection['open_issues']} | {collection['open_pull_requests']} | "
             f"{collection['github_read_requests']} | "
-            f"{metrics['false_available_count']} ({_percent(metrics['false_available_rate'])}) | "
-            f"{_percent(metrics['product_available_ranking']['precision_at_k'])} | "
-            f"{_percent(metrics['oracle_actionable_coverage'])} | "
-            f"{_percent(metrics['github_recent_open_baseline']['precision_at_k'])} | "
-            f"{_percent(metrics['github_unassigned_curated_baseline']['precision_at_k'])} |"
+            f"{metrics['platform_constraint_contradiction_count']} "
+            f"({_percent(metrics['platform_constraint_contradiction_rate'])}) | "
+            f"{_percent(metrics['product_available_ranking']['constraint_clear_precision_at_k'])} | "
+            f"{_percent(metrics['constraint_clear_coverage'])} | "
+            f"{_percent(metrics['github_recent_open_baseline']['constraint_clear_precision_at_k'])} | "
+            f"{_percent(metrics['github_unassigned_curated_baseline']['constraint_clear_precision_at_k'])} |"
         )
 
     lines.extend(
         [
             "",
             "The curated baseline uses only native GitHub fields: no assignee, newcomer labels first,",
-            "then recent update order. The actionability oracle excludes issues with an assignee, a",
-            "locked conversation, a GitHub dependency, or an open PR using a closing keyword.",
+            "then recent update order. A platform constraint flags an assignee, a locked conversation,",
+            "a native GitHub dependency, or an open PR using a closing keyword. ‘Clear’ means only that",
+            "none of those sampled signals fired; it does not mean a person judged the issue suitable.",
+            "",
+            "This is not an independent oracle. Assignee and closing-PR signals overlap production",
+            "behavior, and closing keywords deliberately use the exact production parser. They test",
+            "integration consistency. Only lock and native-dependency fields can expose a constraint the",
+            "current product does not model. Their observed counts are shown below.",
+            "",
+            f"All P@{top_k} values use {top_k} as the fixed denominator. Missing result slots count as",
+            "misses, so returning one perfect candidate cannot score the same as returning ten.",
             "",
         ]
     )
 
     for result in results:
         metrics = result["metrics"]
-        checks = result["precommitted_checks"]
+        checks = result["engineering_checks"]
         collection = result["collection"]
+        constraints = result["platform_constraints"]
         lines.extend(
             [
                 f"## {result['repo']}",
                 "",
                 f"Snapshot: `{result['fetched_at']}`; fingerprint `{result['snapshot_fingerprint']}`.",
-                f"GitHub operations: {collection['github_read_requests']} GET, **0 writes**.",
+                f"GitHub operations counted at the HTTP boundary: "
+                f"{collection['github_read_requests']} GET, "
+                f"**{collection['github_write_requests']} writes**.",
+                f"Platform-only exposure: {constraints['locked']} locked issue(s), "
+                f"{constraints['blocked_by_dependency']} native-dependency issue(s).",
                 "",
-                "| ranking | candidates | precision | inspections for 3 actionable |",
-                "|---|---:|---:|---:|",
+                f"| ranking | candidates | returned / {top_k} | clear P@{top_k} | "
+                "inspections for 3 clear |",
+                "|---|---:|---:|---:|---:|",
             ]
         )
         for label, key in (
@@ -647,53 +730,57 @@ def render_markdown(results: list[dict[str, Any]], top_k: int) -> str:
         ):
             row = metrics[key]
             lines.append(
-                f"| {label} | {row['candidate_count']} | {_percent(row['precision_at_k'])} | "
-                f"{row['inspections_for_three_actionable'] or 'n/a'} |"
+                f"| {label} | {row['candidate_count']} | {row['returned_at_k']} | "
+                f"{_percent(row['constraint_clear_precision_at_k'])} | "
+                f"{row['inspections_for_three_constraint_clear'] or 'n/a'} |"
             )
         lines.extend(
             [
                 "",
-                f"Precommitted false-available threshold: "
-                f"{_percent(checks['false_available_rate_at_most'])}; "
-                f"result **{'PASS' if checks['false_available_rate_pass'] else 'FAIL'}**.",
+                f"Engineering contradiction threshold: "
+                f"{_percent(checks['constraint_contradiction_rate_at_most'])}; "
+                f"result **{'PASS' if checks['constraint_contradiction_rate_pass'] else 'FAIL'}**.",
+                "This is a consistency check, not an estimate of recommendation accuracy.",
                 "",
                 "Assignee-fact ablation on this exact snapshot:",
                 "",
-                "| treatment | available candidates | false available | precision | inspections for 3 actionable |",
+                f"| treatment | available candidates | constraint contradictions | clear P@{top_k} | "
+                "inspections for 3 clear |",
                 "|---|---:|---:|---:|---:|",
                 (
                     f"| assignee facts suppressed | "
                     f"{metrics['without_assignee_fact_ablation']['candidate_count']} | "
-                    f"{metrics['without_assignee_fact_ablation']['false_available_count']} "
-                    f"({_percent(metrics['without_assignee_fact_ablation']['false_available_rate'])}) | "
-                    f"{_percent(metrics['without_assignee_fact_ablation']['precision_at_k'])} | "
-                    f"{metrics['without_assignee_fact_ablation']['inspections_for_three_actionable'] or 'n/a'} |"
+                    f"{metrics['without_assignee_fact_ablation']['platform_constraint_contradiction_count']} "
+                    f"({_percent(metrics['without_assignee_fact_ablation']['platform_constraint_contradiction_rate'])}) | "
+                    f"{_percent(metrics['without_assignee_fact_ablation']['constraint_clear_precision_at_k'])} | "
+                    f"{metrics['without_assignee_fact_ablation']['inspections_for_three_constraint_clear'] or 'n/a'} |"
                 ),
                 (
                     f"| current graph | {metrics['product_available_ranking']['candidate_count']} | "
-                    f"{metrics['false_available_count']} ({_percent(metrics['false_available_rate'])}) | "
-                    f"{_percent(metrics['product_available_ranking']['precision_at_k'])} | "
-                    f"{metrics['product_available_ranking']['inspections_for_three_actionable'] or 'n/a'} |"
+                    f"{metrics['platform_constraint_contradiction_count']} "
+                    f"({_percent(metrics['platform_constraint_contradiction_rate'])}) | "
+                    f"{_percent(metrics['product_available_ranking']['constraint_clear_precision_at_k'])} | "
+                    f"{metrics['product_available_ranking']['inspections_for_three_constraint_clear'] or 'n/a'} |"
                 ),
                 "",
             ]
         )
-        if result["false_available_examples"]:
-            lines.extend(["False-available examples:", ""])
-            for item in result["false_available_examples"][:5]:
-                reasons = "; ".join(item["oracle_reasons"])
+        if result["platform_constraint_contradiction_examples"]:
+            lines.extend(["Available results that contradict platform constraints:", ""])
+            for item in result["platform_constraint_contradiction_examples"][:5]:
+                reasons = "; ".join(item["platform_constraint_reasons"])
                 lines.append(
                     f"- [#{item['number']} {item['title']}]({item['url']}): {reasons}."
                 )
             lines.append("")
-        if result["oracle_actionable_not_returned_examples"]:
+        if result["constraint_clear_not_returned_examples"]:
             lines.extend(
                 [
-                    "Oracle-actionable items withheld by conservative graph signals:",
+                    "Constraint-clear items withheld by conservative graph signals:",
                     "",
                 ]
             )
-            for item in result["oracle_actionable_not_returned_examples"][:5]:
+            for item in result["constraint_clear_not_returned_examples"][:5]:
                 reasons = "; ".join(item["system_reasons"])
                 lines.append(
                     f"- [#{item['number']} {item['title']}]({item['url']}): {reasons}."
@@ -701,8 +788,8 @@ def render_markdown(results: list[dict[str, Any]], top_k: int) -> str:
             lines.extend(
                 [
                     "",
-                    "These are not automatically counted as product errors: the explicit oracle may",
-                    "be incomplete. They are the required human-review set for the next pilot stage.",
+                    "These are not automatically product errors: absence of a sampled platform",
+                    "constraint is not human validation. They are optional future-review candidates.",
                     "",
                 ]
             )
@@ -710,12 +797,15 @@ def render_markdown(results: list[dict[str, Any]], top_k: int) -> str:
         [
             "## What remains unproven",
             "",
-            "- Time-to-selection needs a timed A/B task with contributors; inspection depth is only a proxy.",
-            "- Maintainer burden needs maintainer feedback; this run proves only that repository writes are zero.",
+            "- Time-to-selection needs a timed A/B task with contributors; the inspection count is only a proxy.",
+            "  Pilot 0 does not require recruiting participants because it makes no human-outcome claim.",
+            "- Maintainer burden needs maintainer feedback; this run proves only that its measured write count is zero.",
             "- The snapshot samples recent open items and the latest repository-wide comments, so it can miss",
             "  old comments or PRs outside the sample. A GitHub App backfill is not part of Pilot 0.",
-            "- A plain PR reference is ambiguous. Only closing keywords count as oracle evidence; ambiguous",
+            "- A plain PR reference is ambiguous. Closing keywords count as a platform constraint; ambiguous",
             "  references are listed for manual review instead of being declared right or wrong.",
+            "- Because the constraint evaluator shares the production closing parser, it cannot measure that",
+            "  parser's accuracy. Parser behavior is covered by tests, not by these live headline metrics.",
             "- Pilot 0 uses the deterministic GitHub layer only. Semantic fit and personalization require a",
             "  separate evaluation after factual availability is reliable.",
             "",

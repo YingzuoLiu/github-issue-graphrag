@@ -27,11 +27,29 @@ def snippet(text: str, start: int, end: int) -> str:
     return " ".join(window.split())
 
 
-def _local_number(item: RepoItem, match: re.Match[str]) -> int | None:
+def _local_number(repo: str, match: re.Match[str]) -> int | None:
     qualifier = match.group("repo")
-    if qualifier and qualifier.casefold() != item.repo.casefold():
+    if qualifier and qualifier.casefold() != repo.casefold():
         return None
     return int(match.group("number"))
+
+
+def github_reference_numbers(text: str, repo: str) -> set[int]:
+    """Local issue numbers explicitly mentioned using GitHub reference syntax."""
+    return {
+        number
+        for match in _REFERENCE.finditer(text)
+        if (number := _local_number(repo, match)) is not None
+    }
+
+
+def github_closing_numbers(text: str, repo: str) -> set[int]:
+    """Local issue numbers preceded by a GitHub closing keyword."""
+    return {
+        number
+        for match in _CLOSING.finditer(text)
+        if (number := _local_number(repo, match)) is not None
+    }
 
 
 def module_of(path: str) -> str | None:
@@ -156,33 +174,31 @@ def _reference_facts(
         # "Fixes #123" in an *issue* is a cross-reference, not a close: the
         # ontology says only a pull request may close an issue, and the
         # deterministic path must not emit what the schema forbids.
-        for match in _CLOSING.finditer(text):
-            number = _local_number(item, match)
-            if number is not None:
-                typed[number] = (
-                    "closes" if item.kind == "pull_request" else "references"
-                )
+        for number in github_closing_numbers(text, item.repo):
+            typed[number] = (
+                "closes" if item.kind == "pull_request" else "references"
+            )
         for match in _BLOCKED_BY.finditer(text):
-            number = _local_number(item, match)
-            if number is not None:
-                typed[number] = "blocked_by"
+            blocked_number = _local_number(item.repo, match)
+            if blocked_number is not None:
+                typed[blocked_number] = "blocked_by"
         blocks = {
-            number
+            block_number
             for match in _BLOCKS.finditer(text)
-            if (number := _local_number(item, match)) is not None
+            if (block_number := _local_number(item.repo, match)) is not None
         }
 
         for match in _REFERENCE.finditer(text):
-            number = _local_number(item, match)
-            if number is None:
+            reference_number = _local_number(item.repo, match)
+            if reference_number is None:
                 continue
-            target = index.node_name(number)
+            target = index.node_name(reference_number)
             if not target or target == item.node_name:
                 continue
 
-            predicate = typed.get(number, "references")
+            predicate = typed.get(reference_number, "references")
             subject, obj = item.node_name, target
-            if number in blocks and number not in typed:
+            if reference_number in blocks and reference_number not in typed:
                 # "A blocks #B" is stored as "#B blocked_by A" so the graph has
                 # exactly one direction for the blocking relation.
                 predicate, subject, obj = "blocked_by", target, item.node_name

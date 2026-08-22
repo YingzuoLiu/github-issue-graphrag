@@ -8,7 +8,7 @@ from pathlib import Path
 
 from issue_graphrag.config import load_settings
 from issue_graphrag.pilot import (
-    DEFAULT_FALSE_AVAILABLE_THRESHOLD,
+    DEFAULT_CONSTRAINT_CONTRADICTION_THRESHOLD,
     DEFAULT_PILOT_REPOS,
     GitHubPilotClient,
     evaluate_snapshot,
@@ -30,9 +30,9 @@ def main() -> None:
     parser.add_argument("--comment-limit", type=int, default=100)
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument(
-        "--false-available-threshold",
+        "--constraint-contradiction-threshold",
         type=float,
-        default=DEFAULT_FALSE_AVAILABLE_THRESHOLD,
+        default=DEFAULT_CONSTRAINT_CONTRADICTION_THRESHOLD,
     )
     parser.add_argument("--json-output", type=Path, default=Path("eval/pilot_results.json"))
     parser.add_argument("--markdown-output", type=Path, default=Path("eval/pilot_results.md"))
@@ -46,8 +46,8 @@ def main() -> None:
         parser.error("--comment-limit must be between 0 and 100")
     if args.top_k < 1:
         parser.error("--top-k must be positive")
-    if not 0 <= args.false_available_threshold <= 1:
-        parser.error("--false-available-threshold must be between 0 and 1")
+    if not 0 <= args.constraint_contradiction_threshold <= 1:
+        parser.error("--constraint-contradiction-threshold must be between 0 and 1")
 
     settings = load_settings()
     client = GitHubPilotClient(token=settings.github_token)
@@ -64,22 +64,23 @@ def main() -> None:
         result = evaluate_snapshot(
             snapshot,
             top_k=args.top_k,
-            false_available_threshold=args.false_available_threshold,
+            constraint_contradiction_threshold=args.constraint_contradiction_threshold,
         )
         results.append(result)
-        rate = result["metrics"]["false_available_rate"]
+        rate = result["metrics"]["platform_constraint_contradiction_rate"]
         display = "n/a" if rate is None else f"{rate * 100:.1f}%"
         print(
             f"  {result['collection']['open_issues']} issues, "
             f"{result['collection']['open_pull_requests']} PRs, "
             f"{result['collection']['github_read_requests']} GETs, "
-            f"false-available {display}"
+            f"constraint contradictions {display}"
         )
 
+    write_requests = client.write_request_count
     envelope = {
         "evaluation": "real-repository-contribution-pilot-0",
-        "read_only": True,
-        "github_write_requests": 0,
+        "read_only": write_requests == 0,
+        "github_write_requests": write_requests,
         "configuration": {
             "repos": args.repos,
             "issue_limit": args.issue_limit,
@@ -87,7 +88,9 @@ def main() -> None:
             "max_pages": args.max_pages,
             "comment_limit": args.comment_limit,
             "top_k": args.top_k,
-            "false_available_threshold": args.false_available_threshold,
+            "constraint_contradiction_threshold": (
+                args.constraint_contradiction_threshold
+            ),
             "extractor": "deterministic GitHub facts only",
         },
         "results": results,

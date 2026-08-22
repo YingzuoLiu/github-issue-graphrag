@@ -36,13 +36,14 @@ correctly. Only after that is it meaningful to test semantic fit or personalized
 
 ## Why a dedicated pilot runner is needed
 
-Unit and replay tests prove implementation invariants. They do not measure repository coverage,
-ranking quality or product usefulness. `scripts/run_real_repo_pilot.py` samples current public
-GitHub data and produces a timestamped, fingerprinted result with precommitted metrics, so a poor
-result cannot be hidden behind a successful demo.
+Unit and replay tests prove implementation invariants. They do not measure product usefulness.
+`scripts/run_real_repo_pilot.py` samples current public GitHub data and produces a timestamped,
+fingerprinted result with engineering consistency and coverage measures, so a poor result cannot
+be hidden behind a successful demo.
 
 The runner has only GET operations. It cannot comment, label, assign, close, install a webhook or
-otherwise mutate a pilot repository.
+otherwise mutate a pilot repository. Its HTTP session counts non-GET requests, so the zero-write
+check will fail if a future change introduces one; zero is not a report constant.
 
 ## What stays deterministic
 
@@ -54,7 +55,7 @@ Pilot 0 uses no LLM. These are deterministic:
 - open pull requests with GitHub closing keywords;
 - current graph projection and contribution score;
 - baselines, ranking metrics and report generation;
-- the snapshot fingerprint and the assertion that GitHub writes equal zero.
+- the snapshot fingerprint and the measured assertion that GitHub writes equal zero.
 
 Model extraction is deferred. Semantic relevance cannot be judged safely until factual
 availability is reliable, and an LLM cannot serve as the ground truth for its own recommendation.
@@ -72,7 +73,7 @@ The initial set is intentionally not three copies of the same workload:
 `microsoft/graphrag` was considered but had too little recent open activity at selection time.
 `mem0ai/mem0` remains a replacement if one selected repository becomes unavailable.
 
-## Pilot 0: read-only engineering gate
+## Pilot 0: read-only engineering consistency check
 
 The runner samples recent open issues, open pull requests and the latest repository-wide comments.
 It compares three rankings:
@@ -81,48 +82,69 @@ It compares three rankings:
 2. **GitHub recent:** open issues in GitHub's updated order.
 3. **GitHub curated:** unassigned issues, newcomer labels first, then GitHub's updated order.
 
-The actionability oracle uses only strong platform evidence. An issue is not actionable if it has
-an assignee, is locked, has a native blocking dependency, or an open PR uses a closing keyword for
-it. A plain PR reference is ambiguous; the report lists it for manual review instead of declaring
-it correct or incorrect.
+The platform-constraint label flags an issue if it has an assignee, is locked, has a native blocking
+dependency, or an open PR uses a closing keyword for it. A plain PR reference is ambiguous; the
+report lists it for possible future review instead of declaring it correct or incorrect.
 
-Precommitted checks:
+This label is **not an independent oracle**. Assignee and closing-PR signals overlap production
+behavior, and closing keywords intentionally use the exact production parser so the evaluator
+cannot drift from it. Those checks measure integration consistency, not parser or recommendation
+accuracy. Locked and native-dependency fields are the only sampled constraints the product does
+not currently model, so the report exposes their occurrence counts instead of treating a zero
+contradiction rate as general quality evidence.
 
-- false-available rate must be at most 5%;
+Engineering checks and measures:
+
+- the rate of product-available items that contradict a sampled platform constraint must be at
+  most the originally precommitted 5% threshold;
 - every non-available recommendation must link causal evidence;
-- GitHub write requests must equal zero;
-- product precision at 10 is compared with both native baselines;
-- coverage records how many oracle-actionable issues the product withholds as a conservative
+- measured GitHub write requests must equal zero;
+- constraint-clear precision at 10 is compared with both native baselines, always dividing by 10;
+  an unfilled result slot is a miss;
+- coverage records how many constraint-clear issues the product withholds as a conservative
   `claimed` result;
-- the report records how many entries must be inspected to find three actionable choices.
+- the report records how many entries must be inspected to find three constraint-clear choices.
 
 Each run also suppresses assignee facts in an ablation over the exact same in-memory snapshot.
 That comparison isolates the effect of assignee coverage from repository activity between runs.
 
-If any repository exceeds the false-available threshold, factual coverage is fixed before a user
-study. The threshold is not relaxed after seeing the result.
+If any repository exceeds the contradiction threshold, the integration is fixed before making a
+human-facing claim. The threshold is not relaxed after seeing the result.
 
 ## Observed result (2026-08-22)
 
-The first run failed the precommitted 5% false-available gate in all three repositories. Every
-false-available example was assigned on GitHub, while the live schema did not yet model assignees.
+The first run exceeded the originally named 5% “false available” gate in all three repositories.
+Every contradiction was assigned on GitHub while the live schema did not yet model assignees.
 After adding versioned `assignees`, `CONTRIBUTOR` nodes and GitHub-only `assigned_to` facts, the
-same evaluation passed in all three repositories. The ablation below suppresses only assignee
-facts on the exact same post-fix snapshot, so it isolates that change from repository activity.
+same consistency check passed in all three repositories. The ablation below suppresses only
+assignee facts on the exact same post-fix snapshot, so it isolates that integration repair from
+repository activity.
 
-| Repository | False available without assignee facts | Current false available | Product P@10 | Oracle-actionable coverage | Inspections for 3 (product / recent / curated) |
+| Repository | Contradictions without assignee facts | Current contradictions | Product clear P@10 | Constraint-clear coverage | Inspections for 3 (product / recent / curated) |
 |---|---:|---:|---:|---:|---:|
 | `getzep/graphiti` | 13.0% | 0.0% | 100.0% | 80.0% | 3 / 9 / 9 |
-| `pydantic/pydantic-ai` | 85.0% | 0.0% | 100.0% | 75.0% | 3 / 37 / 6 |
+| `pydantic/pydantic-ai` | 82.9% | 0.0% | 70.0% | 77.8% | 3 / 3 / 3 |
 | `trustgraph-ai/trustgraph` | 12.5% | 0.0% | 100.0% | 93.3% | 3 / 3 / 3 |
 
-This clears the factual safety gate but does not settle product usefulness. The graph conservatively
-withheld five, two and one oracle-actionable issues respectively because an open PR merely
-referenced them. A reference may or may not mean the work is claimed, so those cases are carried
-forward as a human-review set instead of being relabeled after seeing the result. The committed
+The zero current contradictions confirm that the repaired product reads the sampled shared facts
+consistently; they do not estimate recommendation accuracy. In this sample, locked and native
+dependency counts were zero in every repository, so the only two non-overlapping constraint paths
+received no live exposure. The fixed-denominator correction also changes PydanticAI from the old
+6/6 = 100% presentation to 6/10 = 60% on the reviewed snapshot; the refreshed committed run has
+seven returned candidates and correctly reports 7/10 = 70%.
+
+The graph conservatively withheld five, two and one constraint-clear issues respectively because
+an open PR merely referenced them. A reference may or may not mean the work is claimed, so those
+cases remain optional future-review candidates. The committed
 [post-fix report](../eval/pilot_results_after_assignee.md) contains the evidence links and exact
 snapshot fingerprints; the [initial failure](../eval/pilot_results_before_assignee.md) is retained
-as an audit trail.
+as an audit trail under the original terminology.
+
+The most useful result is narrower: assignee modeling prevents a demonstrated integration error.
+Graphiti's closing-keyword PR links coincide with an inspection-depth advantage over GitHub's
+curated baseline. PydanticAI and TrustGraph tie that baseline in the refreshed run, so the current
+data does not support a general claim that the graph reduces inspection burden. TrustGraph, where
+no closing-keyword link fired, remains a useful boundary where native GitHub appears sufficient.
 
 ## What Pilot 0 cannot prove
 
@@ -130,11 +152,13 @@ Top-k precision and inspection depth are proxies. They do not prove that a perso
 faster. Zero writes prove that the run did not touch a repository, not that maintainers perceive no
 burden.
 
-Those questions require two later stages:
+Those questions would require two later stages if the project later makes human-outcome claims.
+They are not required to merge the engineering work or to interpret Pilot 0.
 
 ### Pilot 1: contributor task
 
-- Recruit at least five contributors who are not maintainers of the selected repository.
+- If recruitment becomes practical, target at least five contributors who are not maintainers of
+  the selected repository.
 - Give each person two counterbalanced tasks: choose an issue with GitHub alone and with the pilot
   view.
 - Measure time to a defensible choice, pages opened, abandoned choices and confidence.

@@ -284,16 +284,20 @@ when the repository changes, and explains how those changes move the contributio
 
 A timestamped Pilot 0 ran the deterministic layer against 50 issues and 50 open PRs from each of
 Graphiti and PydanticAI, plus all 17 open TrustGraph issues. It made nine GitHub GET requests and
-zero writes. The first run exposed a real schema omission: assigned issues were still called
-available. After assignees became versioned GitHub facts, all three repositories went from
-13.0% / 85.0% / 12.5% false-available rates to 0.0% on the same-run ablation, with causal evidence
-links present for every non-available result.
+zero measured writes. The first run exposed a real schema omission: assigned issues were still
+called available. In the refreshed report, a same-snapshot ablation produces 13.0% / 82.9% /
+12.5% platform-constraint contradiction rates when assignee facts are suppressed; the current
+graph has zero such contradictions and causal evidence links for every non-available result.
 
-This is an engineering gate, not a user study. Inspection depth improved materially in the two
-larger repositories and tied the native baselines in TrustGraph, while ordinary PR references
-still create a conservative human-review set. See the [method and limitations](docs/real-repo-pilot.md),
-the [initial failure](eval/pilot_results_before_assignee.md), and the
-[post-fix report](eval/pilot_results_after_assignee.md).
+This is an engineering consistency check, not an independent quality benchmark or user study.
+Assignee and closing-PR signals overlap production behavior; the two non-overlapping signals
+(locked issues and native dependencies) did not occur in the sample. Fixed-denominator P@10 is
+100% / 70% / 100% in the refreshed report; the reviewed Pydantic snapshot should have been 6/10,
+not 6/6. Inspection depth beat GitHub's curated baseline in Graphiti and tied it in PydanticAI and
+TrustGraph, so the data does not support a general human-efficiency claim. See the
+[method and limitations](docs/real-repo-pilot.md), the
+[initial failure](eval/pilot_results_before_assignee.md), and the
+[corrected post-fix report](eval/pilot_results_after_assignee.md).
 
 ### The design rule
 
@@ -945,7 +949,7 @@ This project demonstrates:
 - Batch GraphRAG index: MVP complete.
 - Live contribution graph: v0.3 vertical slice complete, with deterministic fixture replay and a
   real signed webhook receiver backed by a durable local worker inbox; a three-repository
-  read-only pilot passes the precommitted factual-availability gate.
+  read-only pilot verifies sampled platform-fact integration and records its limits.
 
 ## Future work
 
@@ -960,8 +964,9 @@ This project demonstrates:
 - **Wire scoped report regeneration into the event loop**, so community reports refresh when the
   communities they describe actually change.
 - **Pull requests as opportunities**: rank PRs that need review alongside unclaimed issues.
-- **Contributor and maintainer pilot**: time issue-selection tasks and review the conservative
-  plain-reference cases with repository experts before claiming lower human burden.
+- **Optional contributor and maintainer pilot**: if recruitment becomes practical, time
+  issue-selection tasks and review conservative plain-reference cases before claiming lower human
+  burden. This is not required for the current engineering-only claim.
 - **Narrow deterministic re-derivation**: index documents by the issue numbers they mention so the
   GitHub-fact pass scales past a few thousand documents.
 - **Relation direction cleanup**: the live graph keeps direction on every edge; the batch pipeline

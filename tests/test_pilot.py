@@ -87,6 +87,10 @@ class FakeSession:
         self.calls.append((url, kwargs))
         return FakeResponse(self.payloads.pop(0))
 
+    def post(self, url, **kwargs):  # noqa: ANN001, ANN201
+        self.calls.append((url, kwargs))
+        return FakeResponse({"accepted": True}, status_code=202)
+
 
 def test_pilot_client_uses_only_gets_and_groups_recent_comments():
     issue = _issue(1)
@@ -113,6 +117,7 @@ def test_pilot_client_uses_only_gets_and_groups_recent_comments():
     )
 
     assert snapshot.request_count == 2
+    assert snapshot.write_request_count == 0
     assert len(session.calls) == 2
     assert all(call[1]["headers"]["User-Agent"] for call in session.calls)
     assert snapshot.seed["items"][0]["comments"]["99"]["body"] == "I can reproduce this."
@@ -139,25 +144,34 @@ def test_pilot_models_assignees_while_separating_ambiguous_pr_references():
         request_count=2,
     )
 
-    result = evaluate_snapshot(snapshot, top_k=10, false_available_threshold=0.05)
+    result = evaluate_snapshot(
+        snapshot,
+        top_k=10,
+        constraint_contradiction_threshold=0.05,
+    )
 
     assert result["system_status_counts"] == {
         "available": 1,
         "claimed": 3,
         "blocked": 0,
     }
-    assert result["metrics"]["false_available_count"] == 0
-    assert result["metrics"]["false_available_rate"] == 0.0
-    assert result["false_available_examples"] == []
+    assert result["metrics"]["platform_constraint_contradiction_count"] == 0
+    assert result["metrics"]["platform_constraint_contradiction_rate"] == 0.0
+    assert result["platform_constraint_contradiction_examples"] == []
     assert result["metrics"]["causal_evidence_url_coverage"] == 1.0
-    assert result["metrics"]["without_assignee_fact_ablation"]["false_available_rate"] == 0.5
-    assert result["metrics"]["oracle_actionable_coverage"] == 0.5
-    assert result["metrics"]["oracle_actionable_not_returned_count"] == 1
-    assert result["oracle_actionable_not_returned_examples"][0]["number"] == 5
+    ablation = result["metrics"]["without_assignee_fact_ablation"]
+    assert ablation["platform_constraint_contradiction_rate"] == 0.5
+    assert result["metrics"]["product_available_ranking"][
+        "constraint_clear_precision_at_k"
+    ] == 0.1
+    assert ablation["constraint_clear_precision_at_k"] == 0.1
+    assert result["metrics"]["constraint_clear_coverage"] == 0.5
+    assert result["metrics"]["constraint_clear_not_returned_count"] == 1
+    assert result["constraint_clear_not_returned_examples"][0]["number"] == 5
     assert result["metrics"]["ambiguous_plain_reference_claims"] == 1
     assert result["ambiguous_claim_examples"][0]["number"] == 5
-    assert result["precommitted_checks"]["false_available_rate_pass"]
-    assert result["precommitted_checks"]["github_write_requests_are_zero"]
+    assert result["engineering_checks"]["constraint_contradiction_rate_pass"]
+    assert result["engineering_checks"]["github_write_requests_are_zero"]
 
 
 def test_pilot_markdown_states_what_the_dry_run_does_not_prove():
@@ -172,9 +186,35 @@ def test_pilot_markdown_states_what_the_dry_run_does_not_prove():
 
     assert "not a user study" in report
     assert "**0 writes**" in report
+    assert "not an independent oracle" in report
+    assert "Missing result slots count as" in report
     assert "Assignee-fact ablation on this exact snapshot" in report
     assert "Time-to-selection needs a timed A/B task" in report
     assert "Maintainer burden needs maintainer feedback" in report
+
+
+def test_pilot_write_check_is_measured_and_can_fail():
+    session = FakeSession([])
+    client = GitHubPilotClient(session=session)
+
+    response = client.session.post(
+        f"https://api.github.com/repos/{REPO}/issues/1/labels",
+        json={"labels": ["help wanted"]},
+    )
+    snapshot = make_snapshot(
+        REPO,
+        [_issue(1)],
+        [],
+        fetched_at=NOW,
+        request_count=client.request_count,
+        write_request_count=client.write_request_count,
+    )
+    result = evaluate_snapshot(snapshot)
+
+    assert response.status_code == 202
+    assert client.write_request_count == 1
+    assert result["collection"]["github_write_requests"] == 1
+    assert not result["engineering_checks"]["github_write_requests_are_zero"]
 
 
 def test_pilot_distinguishes_local_and_cross_repo_qualified_closing_references():
@@ -196,8 +236,8 @@ def test_pilot_distinguishes_local_and_cross_repo_qualified_closing_references()
     local_result = evaluate_snapshot(local)
     cross_repo_result = evaluate_snapshot(cross_repo)
 
-    assert local_result["oracle"]["claimed_by_closing_pr"] == 1
+    assert local_result["platform_constraints"]["claimed_by_closing_pr"] == 1
     assert local_result["system_status_counts"]["claimed"] == 1
-    assert local_result["metrics"]["false_available_count"] == 0
-    assert cross_repo_result["oracle"]["claimed_by_closing_pr"] == 0
+    assert local_result["metrics"]["platform_constraint_contradiction_count"] == 0
+    assert cross_repo_result["platform_constraints"]["claimed_by_closing_pr"] == 0
     assert cross_repo_result["system_status_counts"]["available"] == 1

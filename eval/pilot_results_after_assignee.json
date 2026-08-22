@@ -13,13 +13,13 @@
     "max_pages": 3,
     "comment_limit": 100,
     "top_k": 10,
-    "false_available_threshold": 0.05,
+    "constraint_contradiction_threshold": 0.05,
     "extractor": "deterministic GitHub facts only"
   },
   "results": [
     {
       "repo": "getzep/graphiti",
-      "fetched_at": "2026-08-22T07:54:49Z",
+      "fetched_at": "2026-08-22T11:02:14Z",
       "snapshot_fingerprint": "b74ccfc9668c4223be15d4d3543f4712835e04880657e4a58306b0519691fd9f",
       "collection": {
         "open_issues": 50,
@@ -34,19 +34,30 @@
         "claimed": 30,
         "blocked": 0
       },
-      "oracle": {
-        "actionable": 25,
-        "explicitly_unavailable": 25,
+      "platform_constraints": {
+        "clear": 25,
+        "flagged": 25,
         "assigned": 3,
         "locked": 0,
         "blocked_by_dependency": 0,
-        "claimed_by_closing_pr": 22
+        "claimed_by_closing_pr": 22,
+        "measurement_basis": {
+          "raw_github_fields": [
+            "assignees",
+            "locked",
+            "issue_dependencies_summary"
+          ],
+          "shared_production_parser": [
+            "pull request closing-keyword references"
+          ]
+        }
       },
       "metrics": {
         "product_available_ranking": {
           "candidate_count": 20,
-          "precision_at_k": 1.0,
-          "inspections_for_three_actionable": 3,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 1.0,
+          "inspections_for_three_constraint_clear": 3,
           "top_numbers": [
             402,
             459,
@@ -62,8 +73,9 @@
         },
         "without_assignee_fact_ablation": {
           "candidate_count": 23,
-          "precision_at_k": 0.8,
-          "inspections_for_three_actionable": 3,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.8,
+          "inspections_for_three_constraint_clear": 3,
           "top_numbers": [
             402,
             459,
@@ -76,13 +88,14 @@
             1469,
             1496
           ],
-          "false_available_count": 3,
-          "false_available_rate": 0.1304
+          "platform_constraint_contradiction_count": 3,
+          "platform_constraint_contradiction_rate": 0.1304
         },
         "github_recent_open_baseline": {
           "candidate_count": 50,
-          "precision_at_k": 0.4,
-          "inspections_for_three_actionable": 9,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.4,
+          "inspections_for_three_constraint_clear": 9,
           "top_numbers": [
             1728,
             1789,
@@ -98,8 +111,9 @@
         },
         "github_unassigned_curated_baseline": {
           "candidate_count": 47,
-          "precision_at_k": 0.4,
-          "inspections_for_three_actionable": 9,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.4,
+          "inspections_for_three_constraint_clear": 9,
           "top_numbers": [
             1728,
             1789,
@@ -113,19 +127,19 @@
             868
           ]
         },
-        "false_available_count": 0,
-        "false_available_rate": 0.0,
+        "platform_constraint_contradiction_count": 0,
+        "platform_constraint_contradiction_rate": 0.0,
         "causal_evidence_url_coverage": 1.0,
         "ambiguous_plain_reference_claims": 5,
-        "oracle_actionable_coverage": 0.8,
-        "oracle_actionable_not_returned_count": 5
+        "constraint_clear_coverage": 0.8,
+        "constraint_clear_not_returned_count": 5
       },
-      "precommitted_checks": {
-        "false_available_rate_at_most": 0.05,
-        "false_available_rate_pass": true,
+      "engineering_checks": {
+        "constraint_contradiction_rate_at_most": 0.05,
+        "constraint_contradiction_rate_pass": true,
         "all_non_available_results_have_causal_evidence_url": true,
         "github_write_requests_are_zero": true,
-        "beats_recent_baseline_at_top_k": true
+        "higher_constraint_clear_precision_than_recent_at_k": true
       },
       "top_product_candidates": [
         {
@@ -136,8 +150,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 459,
@@ -147,8 +161,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 723,
@@ -158,8 +172,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 868,
@@ -171,8 +185,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 1111,
@@ -184,8 +198,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 1135,
@@ -197,8 +211,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 1397,
@@ -208,8 +222,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 1496,
@@ -219,8 +233,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 1556,
@@ -230,8 +244,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 1602,
@@ -241,11 +255,11 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         }
       ],
-      "false_available_examples": [],
+      "platform_constraint_contradiction_examples": [],
       "ambiguous_claim_examples": [
         {
           "number": 1645,
@@ -255,8 +269,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "referenced_by_open_prs": [
             1790
           ],
@@ -270,8 +284,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "referenced_by_open_prs": [
             1718
           ],
@@ -285,8 +299,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "referenced_by_open_prs": [
             1753
           ],
@@ -300,8 +314,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "referenced_by_open_prs": [
             1730
           ],
@@ -315,15 +329,15 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "referenced_by_open_prs": [
             1752
           ],
           "review_note": "plain PR reference is not independent proof that work is claimed"
         }
       ],
-      "oracle_actionable_not_returned_examples": [
+      "constraint_clear_not_returned_examples": [
         {
           "number": 1645,
           "title": "MCP server: search behavior is hardcoded — proposal: configurable reranker, stale-fact filtering, result counts, relevance scores",
@@ -332,8 +346,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "system_reasons": [
             "open issue (+1.00)",
             "already picked up by PR #1790 (open) (-2.00)"
@@ -347,7 +361,7 @@
           "known_open_pr_plain_references": [
             1790
           ],
-          "review_note": "explicit GitHub oracle found no unavailable signal; conservative system evidence needs human review"
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
         },
         {
           "number": 1714,
@@ -357,8 +371,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "system_reasons": [
             "open issue (+1.00)",
             "already picked up by PR #1718 (open) (-2.00)"
@@ -372,7 +386,7 @@
           "known_open_pr_plain_references": [
             1718
           ],
-          "review_note": "explicit GitHub oracle found no unavailable signal; conservative system evidence needs human review"
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
         },
         {
           "number": 1723,
@@ -382,8 +396,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "system_reasons": [
             "open issue (+1.00)",
             "already picked up by PR #1753 (open) (-2.00)"
@@ -397,7 +411,7 @@
           "known_open_pr_plain_references": [
             1753
           ],
-          "review_note": "explicit GitHub oracle found no unavailable signal; conservative system evidence needs human review"
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
         },
         {
           "number": 1727,
@@ -407,8 +421,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "system_reasons": [
             "open issue (+1.00)",
             "already picked up by PR #1718 (open), PR #1726 (open), PR #1730 (draft) (-2.00)"
@@ -430,7 +444,7 @@
           "known_open_pr_plain_references": [
             1730
           ],
-          "review_note": "explicit GitHub oracle found no unavailable signal; conservative system evidence needs human review"
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
         },
         {
           "number": 1751,
@@ -440,8 +454,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "system_reasons": [
             "open issue (+1.00)",
             "already picked up by PR #1752 (open) (-2.00)"
@@ -455,43 +469,55 @@
           "known_open_pr_plain_references": [
             1752
           ],
-          "review_note": "explicit GitHub oracle found no unavailable signal; conservative system evidence needs human review"
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
         }
       ]
     },
     {
       "repo": "pydantic/pydantic-ai",
-      "fetched_at": "2026-08-22T07:54:55Z",
-      "snapshot_fingerprint": "d7ae5dd5c8632fbbce7502fe32f2fe2be36178a4c26267d510e6aab2fec4a399",
+      "fetched_at": "2026-08-22T11:02:20Z",
+      "snapshot_fingerprint": "862b38381c9ad47b0e05929a7ef4431dac748fc7731eabfb9aaa90f06c75bf77",
       "collection": {
         "open_issues": 50,
         "open_pull_requests": 50,
         "recent_comments": 100,
         "github_read_requests": 4,
         "github_write_requests": 0,
-        "reported_comment_count_on_sampled_items": 361
+        "reported_comment_count_on_sampled_items": 365
       },
       "system_status_counts": {
-        "available": 6,
-        "claimed": 44,
+        "available": 7,
+        "claimed": 43,
         "blocked": 0
       },
-      "oracle": {
-        "actionable": 8,
-        "explicitly_unavailable": 42,
+      "platform_constraints": {
+        "clear": 9,
+        "flagged": 41,
         "assigned": 35,
         "locked": 0,
         "blocked_by_dependency": 0,
-        "claimed_by_closing_pr": 8
+        "claimed_by_closing_pr": 7,
+        "measurement_basis": {
+          "raw_github_fields": [
+            "assignees",
+            "locked",
+            "issue_dependencies_summary"
+          ],
+          "shared_production_parser": [
+            "pull request closing-keyword references"
+          ]
+        }
       },
       "metrics": {
         "product_available_ranking": {
-          "candidate_count": 6,
-          "precision_at_k": 1.0,
-          "inspections_for_three_actionable": 3,
+          "candidate_count": 7,
+          "returned_at_k": 7,
+          "constraint_clear_precision_at_k": 0.7,
+          "inspections_for_three_constraint_clear": 3,
           "top_numbers": [
             5685,
             7484,
+            7632,
             7665,
             7677,
             7680,
@@ -499,9 +525,10 @@
           ]
         },
         "without_assignee_fact_ablation": {
-          "candidate_count": 40,
-          "precision_at_k": 0.0,
-          "inspections_for_three_actionable": 37,
+          "candidate_count": 41,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.0,
+          "inspections_for_three_constraint_clear": 37,
           "top_numbers": [
             1270,
             1275,
@@ -514,56 +541,58 @@
             3336,
             3561
           ],
-          "false_available_count": 34,
-          "false_available_rate": 0.85
+          "platform_constraint_contradiction_count": 34,
+          "platform_constraint_contradiction_rate": 0.8293
         },
         "github_recent_open_baseline": {
           "candidate_count": 50,
-          "precision_at_k": 0.1,
-          "inspections_for_three_actionable": 37,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.3,
+          "inspections_for_three_constraint_clear": 3,
           "top_numbers": [
             7688,
+            7665,
+            7632,
             6974,
             6976,
             6243,
             3794,
             3684,
             3561,
-            5144,
-            4262,
-            5151
+            5144
           ]
         },
         "github_unassigned_curated_baseline": {
           "candidate_count": 15,
-          "precision_at_k": 0.6,
-          "inspections_for_three_actionable": 6,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.7,
+          "inspections_for_three_constraint_clear": 3,
           "top_numbers": [
             7688,
+            7665,
+            7632,
             7496,
             7678,
             7686,
             7484,
             7677,
             7683,
-            7680,
-            7665,
-            7654
+            7680
           ]
         },
-        "false_available_count": 0,
-        "false_available_rate": 0.0,
+        "platform_constraint_contradiction_count": 0,
+        "platform_constraint_contradiction_rate": 0.0,
         "causal_evidence_url_coverage": 1.0,
         "ambiguous_plain_reference_claims": 1,
-        "oracle_actionable_coverage": 0.75,
-        "oracle_actionable_not_returned_count": 2
+        "constraint_clear_coverage": 0.7778,
+        "constraint_clear_not_returned_count": 2
       },
-      "precommitted_checks": {
-        "false_available_rate_at_most": 0.05,
-        "false_available_rate_pass": true,
+      "engineering_checks": {
+        "constraint_contradiction_rate_at_most": 0.05,
+        "constraint_contradiction_rate_pass": true,
         "all_non_available_results_have_causal_evidence_url": true,
         "github_write_requests_are_zero": true,
-        "beats_recent_baseline_at_top_k": true
+        "higher_constraint_clear_precision_than_recent_at_k": true
       },
       "top_product_candidates": [
         {
@@ -578,8 +607,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 7484,
@@ -596,8 +625,27 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
+        },
+        {
+          "number": 7632,
+          "title": "`AGUIAdapter` replaces inbound AG-UI message IDs on a load/dump round-trip",
+          "url": "https://github.com/pydantic/pydantic-ai/issues/7632",
+          "labels": [
+            "AG-UI",
+            "area:ui-adapters",
+            "bug",
+            "message-history",
+            "needs-discussion",
+            "p:4-low",
+            "pydanty:bug"
+          ],
+          "assignees": [],
+          "system_status": "available",
+          "system_score": 1.0,
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 7665,
@@ -607,8 +655,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 7677,
@@ -618,8 +666,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 7680,
@@ -631,8 +679,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 7688,
@@ -646,11 +694,11 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         }
       ],
-      "false_available_examples": [],
+      "platform_constraint_contradiction_examples": [],
       "ambiguous_claim_examples": [
         {
           "number": 7683,
@@ -660,15 +708,15 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "referenced_by_open_prs": [
             7681
           ],
           "review_note": "plain PR reference is not independent proof that work is claimed"
         }
       ],
-      "oracle_actionable_not_returned_examples": [
+      "constraint_clear_not_returned_examples": [
         {
           "number": 7648,
           "title": "Add multimodal `ToolReturn.content` durability coverage for DBOS and Prefect",
@@ -677,8 +725,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "system_reasons": [
             "open issue (+1.00)",
             "already picked up by PR #7618 (open) (-2.00)"
@@ -690,7 +738,7 @@
             }
           ],
           "known_open_pr_plain_references": [],
-          "review_note": "explicit GitHub oracle found no unavailable signal; conservative system evidence needs human review"
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
         },
         {
           "number": 7683,
@@ -700,8 +748,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "system_reasons": [
             "open issue (+1.00)",
             "already picked up by PR #7681 (open) (-2.00)"
@@ -715,13 +763,13 @@
           "known_open_pr_plain_references": [
             7681
           ],
-          "review_note": "explicit GitHub oracle found no unavailable signal; conservative system evidence needs human review"
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
         }
       ]
     },
     {
       "repo": "trustgraph-ai/trustgraph",
-      "fetched_at": "2026-08-22T07:54:56Z",
+      "fetched_at": "2026-08-22T11:02:22Z",
       "snapshot_fingerprint": "c20e9f8383ca3cc673290f98fa13faa55224ced245b352e659dd1ebe6d7c8899",
       "collection": {
         "open_issues": 17,
@@ -736,19 +784,30 @@
         "claimed": 3,
         "blocked": 0
       },
-      "oracle": {
-        "actionable": 15,
-        "explicitly_unavailable": 2,
+      "platform_constraints": {
+        "clear": 15,
+        "flagged": 2,
         "assigned": 2,
         "locked": 0,
         "blocked_by_dependency": 0,
-        "claimed_by_closing_pr": 0
+        "claimed_by_closing_pr": 0,
+        "measurement_basis": {
+          "raw_github_fields": [
+            "assignees",
+            "locked",
+            "issue_dependencies_summary"
+          ],
+          "shared_production_parser": [
+            "pull request closing-keyword references"
+          ]
+        }
       },
       "metrics": {
         "product_available_ranking": {
           "candidate_count": 14,
-          "precision_at_k": 1.0,
-          "inspections_for_three_actionable": 3,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 1.0,
+          "inspections_for_three_constraint_clear": 3,
           "top_numbers": [
             791,
             874,
@@ -764,8 +823,9 @@
         },
         "without_assignee_fact_ablation": {
           "candidate_count": 16,
-          "precision_at_k": 0.8,
-          "inspections_for_three_actionable": 3,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.8,
+          "inspections_for_three_constraint_clear": 3,
           "top_numbers": [
             791,
             874,
@@ -778,13 +838,14 @@
             431,
             432
           ],
-          "false_available_count": 2,
-          "false_available_rate": 0.125
+          "platform_constraint_contradiction_count": 2,
+          "platform_constraint_contradiction_rate": 0.125
         },
         "github_recent_open_baseline": {
           "candidate_count": 17,
-          "precision_at_k": 0.9,
-          "inspections_for_three_actionable": 3,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 0.9,
+          "inspections_for_three_constraint_clear": 3,
           "top_numbers": [
             1095,
             1094,
@@ -800,8 +861,9 @@
         },
         "github_unassigned_curated_baseline": {
           "candidate_count": 15,
-          "precision_at_k": 1.0,
-          "inspections_for_three_actionable": 3,
+          "returned_at_k": 10,
+          "constraint_clear_precision_at_k": 1.0,
+          "inspections_for_three_constraint_clear": 3,
           "top_numbers": [
             876,
             874,
@@ -815,19 +877,19 @@
             430
           ]
         },
-        "false_available_count": 0,
-        "false_available_rate": 0.0,
+        "platform_constraint_contradiction_count": 0,
+        "platform_constraint_contradiction_rate": 0.0,
         "causal_evidence_url_coverage": 1.0,
         "ambiguous_plain_reference_claims": 1,
-        "oracle_actionable_coverage": 0.9333,
-        "oracle_actionable_not_returned_count": 1
+        "constraint_clear_coverage": 0.9333,
+        "constraint_clear_not_returned_count": 1
       },
-      "precommitted_checks": {
-        "false_available_rate_at_most": 0.05,
-        "false_available_rate_pass": true,
+      "engineering_checks": {
+        "constraint_contradiction_rate_at_most": 0.05,
+        "constraint_contradiction_rate_pass": true,
         "all_non_available_results_have_causal_evidence_url": true,
         "github_write_requests_are_zero": true,
-        "beats_recent_baseline_at_top_k": true
+        "higher_constraint_clear_precision_than_recent_at_k": true
       },
       "top_product_candidates": [
         {
@@ -842,8 +904,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.75,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 874,
@@ -857,8 +919,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.75,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 876,
@@ -872,8 +934,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.75,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 944,
@@ -888,8 +950,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.75,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 157,
@@ -902,8 +964,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 430,
@@ -916,8 +978,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 431,
@@ -931,8 +993,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 432,
@@ -946,8 +1008,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 582,
@@ -961,8 +1023,8 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         },
         {
           "number": 675,
@@ -975,11 +1037,11 @@
           "assignees": [],
           "system_status": "available",
           "system_score": 1.0,
-          "oracle_actionable": true,
-          "oracle_reasons": []
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": []
         }
       ],
-      "false_available_examples": [],
+      "platform_constraint_contradiction_examples": [],
       "ambiguous_claim_examples": [
         {
           "number": 783,
@@ -993,15 +1055,15 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "referenced_by_open_prs": [
             1097
           ],
           "review_note": "plain PR reference is not independent proof that work is claimed"
         }
       ],
-      "oracle_actionable_not_returned_examples": [
+      "constraint_clear_not_returned_examples": [
         {
           "number": 783,
           "title": "Replace bare except: with specific exceptions",
@@ -1014,8 +1076,8 @@
           "assignees": [],
           "system_status": "claimed",
           "system_score": 0.0,
-          "oracle_actionable": true,
-          "oracle_reasons": [],
+          "platform_constraint_clear": true,
+          "platform_constraint_reasons": [],
           "system_reasons": [
             "open issue (+1.00)",
             "labeled good first issue (+0.75)",
@@ -1030,7 +1092,7 @@
           "known_open_pr_plain_references": [
             1097
           ],
-          "review_note": "explicit GitHub oracle found no unavailable signal; conservative system evidence needs human review"
+          "review_note": "no sampled platform constraint fired; conservative system evidence is an optional future-review candidate"
         }
       ]
     }
