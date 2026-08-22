@@ -16,6 +16,7 @@ from issue_graphrag.live.contribution import opportunities
 from issue_graphrag.live.models import LiveState
 from issue_graphrag.live.projection import project_graph
 from issue_graphrag.live.store import read_state
+from issue_graphrag.live.viz import distinct_relations
 
 
 def resolve_moment(state: LiveState, as_of: str | None) -> str | None:
@@ -62,7 +63,11 @@ def print_explain(state: LiveState, node: str, moment: str | None) -> None:
     print("\n  Edges")
     for neighbour in sorted(graph.neighbors(node)):
         edge = graph.edges[node, neighbour]
-        for row in edge.get("directed_relations", []):
+        # The projection keeps one row per asserting fact, so a triple stated by
+        # two documents appears twice. The evidence lines below carry that detail;
+        # repeating the triple itself just looks like a bug. Origin stays part of
+        # the identity here because the marker below is per row.
+        for row in distinct_relations(edge.get("directed_relations", []), include_origin=True):
             marker = "github" if row["origin"] == "github" else "inferred"
             print(f"    [{marker:8}] {row['source']} --{row['relation']}--> {row['target']}")
         for evidence in edge.get("evidence", [])[:3]:

@@ -16,7 +16,7 @@ from issue_graphrag.retrieval.global_search import global_search
 from issue_graphrag.retrieval.local_search import local_search
 from issue_graphrag.retrieval.naive_search import naive_search
 from issue_graphrag.retrieval.router import route_query
-from issue_graphrag.storage.json_store import read_graph, read_json
+from issue_graphrag.storage.json_store import missing_batch_index, read_graph, read_json
 
 
 ANSWER_PROMPT = """
@@ -111,6 +111,26 @@ def retrieve_context(mode: str, question: str, graph, text_units, reports):
 
 
 def render_ask_tab(mode: str, generate_answer: bool, show_context: bool, question: str) -> None:
+    missing = missing_batch_index(load_settings().processed_data_dir)
+    if missing:
+        # The live tab works straight from a clone; the batch index does not, so
+        # say which file is absent instead of raising FileNotFoundError at the
+        # user through a Streamlit traceback.
+        st.warning(
+            "No batch index yet — `"
+            + "`, `".join(missing)
+            + "` "
+            + ("is" if len(missing) == 1 else "are")
+            + " missing. Build one with:\n\n"
+            "```bash\n"
+            "python scripts/fetch_github_issues.py trustgraph-ai/trustgraph --state open --limit 20\n"
+            "python scripts/build_index.py trustgraph-ai__trustgraph_issues.json\n"
+            "```\n\n"
+            "This step calls the configured LLM provider. The **Live contribution graph** "
+            "tab needs no index and no API key."
+        )
+        return
+
     if not st.button("Run query", type="primary"):
         st.info("Choose a demo question or enter your own, then click Run query.")
         return

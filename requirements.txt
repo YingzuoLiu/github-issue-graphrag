@@ -1,3 +1,7 @@
+# Convenience mirror of pyproject.toml for `pip install -r`.
+# `pip install -e ".[app]"` (or ".[dev]") is the canonical install; the extras
+# in pyproject.toml are the source of truth.
+
 networkx>=3.2
 pydantic>=2.6
 python-dotenv>=1.0
@@ -6,12 +10,14 @@ numpy>=1.26
 rank-bm25>=0.2.2
 tqdm>=4.66
 
-# Optional local embeddings
+# Streamlit demo -- the ".[app]" extra
+streamlit>=1.32
+
+# Optional vector index -- the ".[embeddings,vector]" extras
 # sentence-transformers>=2.7
 # qdrant-client>=1.14,<2
 
-# Dev
+# Tests and linting -- the ".[dev]" extra
 pytest>=8.0
 ruff>=0.5
 mypy>=1.8
-streamlit

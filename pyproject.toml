@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "github-issue-graphrag"
-version = "0.1.0"
+version = "0.3.0"
 description = "A lightweight GraphRAG pipeline for analyzing GitHub issues and repository documents."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
   { name = "Yingzuo Liu" }
 ]
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
   "networkx>=3.2",
   "pydantic>=2.6",
@@ -21,12 +23,20 @@ dependencies = [
   "tqdm>=4.66"
 ]
 
+[project.urls]
+Homepage = "https://github.com/YingzuoLiu/github-issue-graphrag"
+Repository = "https://github.com/YingzuoLiu/github-issue-graphrag"
+
 [project.optional-dependencies]
+app = [
+  "streamlit>=1.32"
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.5",
   "mypy>=1.8",
-  "qdrant-client>=1.14,<2"
+  "qdrant-client>=1.14,<2",
+  "streamlit>=1.32"
 ]
 embeddings = [
   "sentence-transformers>=2.7"
