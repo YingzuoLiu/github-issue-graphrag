@@ -12,8 +12,6 @@ SIGNATURE_HEADER = "X-Hub-Signature-256"
 DELIVERY_HEADER = "X-GitHub-Delivery"
 EVENT_HEADER = "X-GitHub-Event"
 
-SUPPORTED_EVENTS = ("issues", "issue_comment", "pull_request")
-
 
 class WebhookError(ValueError):
     """Raised when a delivery cannot be trusted or understood."""

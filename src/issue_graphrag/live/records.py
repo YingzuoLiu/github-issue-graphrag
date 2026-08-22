@@ -21,10 +21,6 @@ from typing import Any
 from issue_graphrag.live.models import Comment, LiveState, RepoEvent, RepoItem, SourceVersion
 from issue_graphrag.live.timeutil import max_iso, to_iso
 
-#: Event types the incremental indexer knows how to apply.
-SUPPORTED_EVENTS = ("issues", "issue_comment", "pull_request")
-
-
 class UnsupportedEvent(ValueError):
     """Raised for a delivery the incremental indexer intentionally ignores."""
 
@@ -194,8 +190,9 @@ def upsert_comment(
     )
 
     tombstone = item.deleted_comments.get(comment_id)
-    if tombstone and incoming.version_key() <= tombstone.key():
-        # The comment was deleted after this version was written.
+    if tombstone and incoming.version_key()[0] <= tombstone.effective_at:
+        # A deletion wins when GitHub gives it the same source timestamp as the
+        # last edit. Delivery ids are deterministic but carry no causal order.
         return False
 
     existing = item.comments.get(comment_id)
@@ -227,7 +224,7 @@ def remove_comment(
         return False
 
     current = item.comments.get(comment_id)
-    if current is not None and deletion.key() < current.version_key():
+    if current is not None and deletion.effective_at < current.version_key()[0]:
         # The delete describes an older comment version than the edit we hold.
         return False
 

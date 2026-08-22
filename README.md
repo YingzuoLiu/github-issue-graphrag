@@ -295,7 +295,7 @@ derived from can also be overwritten out of order. So the index keeps two clocks
 | Clock | What it is | What it decides |
 |---|---|---|
 | `effective_at` | the newest timestamp GitHub reports for a record | which payload wins; an older payload can never overwrite newer state, whenever it arrives |
-| ingestion time | when the index applied a delivery, forced strictly monotonic | when a fact's validity window opens |
+| `indexed_at` | logical ingestion order, forced strictly monotonic at one-second precision | when a fact's validity window opens |
 
 Every present field carries its own `(effective_at, delivery_id)` source version. Ties resolve the
 same way in either arrival order without letting one partial payload hide fields that only another
@@ -466,6 +466,7 @@ properties that make the word "temporal" honest:
 | A comment on a merged pull request keeps it merged | `test_a_comment_on_a_merged_pull_request_keeps_it_merged` |
 | A deleted comment is not resurrected by a late create | `test_a_deleted_comment_is_not_resurrected_by_a_late_create` |
 | A stale delete cannot erase a newer comment edit | `test_a_stale_delete_cannot_remove_a_newer_comment_edit` |
+| A deletion wins an equal-timestamp edit tie in either order | `test_comment_delete_wins_same_timestamp_tie_in_either_order` |
 | Same-timestamp partial PR payloads converge in either order | `test_same_timestamp_partial_pr_payloads_converge_in_either_order` |
 | Same-second events keep distinct history windows | `test_events_received_in_the_same_second_get_distinct_history_windows` |
 | The fingerprint can actually fail, on direction and on evidence | `test_signature_distinguishes_edge_direction`, `test_signature_distinguishes_evidence` |
@@ -806,6 +807,10 @@ Known limitations:
   repository would want the derivation narrowed to documents that mention the changed numbers.
 - Cross-document references only become edges for issues and pull requests the index has actually
   ingested. A mention of an un-ingested number is left out rather than creating a phantom node.
+- `indexed_at` is a logical clock stored at one-second precision. A burst of N deliveries received
+  in one second can therefore display an index time up to N-1 seconds ahead of `received_at`; order
+  and history remain correct, and the clock converges again as wall time catches up. A production
+  event log should keep `received_at` for display and use a separate sequence for total ordering.
 - Live file nodes are identified by full repo-relative path. An extracted bare basename resolves
   onto that path only when exactly one known file matches; if several do, it stays a separate node
   rather than being merged into a file it may not be. The batch pipeline still keys files by

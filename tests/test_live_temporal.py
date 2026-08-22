@@ -366,6 +366,39 @@ def test_a_stale_delete_cannot_remove_a_newer_comment_edit(seeded_state, extract
     assert "8" not in item.deleted_comments
 
 
+def test_comment_delete_wins_same_timestamp_tie_in_either_order():
+    """Deletion dominates an equally-timestamped edit, independent of delivery ids."""
+    moment = "2024-05-06T08:30:00Z"
+    comment = {
+        "id": 10,
+        "body": "remove this",
+        "user": {"login": "a"},
+        "created_at": "2024-05-04T08:30:00Z",
+        "updated_at": moment,
+    }
+    parent = issue_payload(875, updated_at=moment)
+    edited = make_event(
+        "z-edit",
+        "issue_comment",
+        {"action": "edited", "issue": parent, "comment": comment},
+        moment,
+    )
+    deleted = make_event(
+        "a-delete",
+        "issue_comment",
+        {"action": "deleted", "issue": parent, "comment": comment},
+        moment,
+    )
+
+    for events in ([edited, deleted], [deleted, edited]):
+        state = LiveState(repo=REPO)
+        replay(state, [event.model_copy(deep=True) for event in events], NullExtractor())
+
+        item = state.items[f"{REPO}#issue-875"]
+        assert item.comments == {}
+        assert item.deleted_comments["10"].effective_at == moment
+
+
 def test_same_timestamp_partial_pr_payloads_converge_in_either_order():
     """Field-wise versions keep a comment snapshot from hiding PR-only fields."""
     moment = "2024-05-06T15:00:00Z"
