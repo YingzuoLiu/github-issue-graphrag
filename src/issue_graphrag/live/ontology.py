@@ -6,7 +6,7 @@ is permitted to assert are declared here, in one place. Extraction output is
 validated against this schema before it is allowed to become a fact.
 
 The rule that matters most is the origin split. Predicates GitHub states
-outright (state, labels, references, closing keywords, changed files) are
+outright (state, labels, assignees, references, closing keywords, changed files) are
 ``github`` predicates and can only be written by the deterministic path. An
 inferred fact that tries to claim one is rejected, so the model can never
 overwrite something the platform already told us.
@@ -22,7 +22,7 @@ from issue_graphrag.live.models import Fact
 Origin = Literal["github", "llm"]
 
 #: Node types the deterministic path assigns. Anything else is a concept.
-GITHUB_NODE_TYPES = ("ISSUE", "PULL_REQUEST", "FILE", "MODULE")
+GITHUB_NODE_TYPES = ("ISSUE", "PULL_REQUEST", "FILE", "MODULE", "CONTRIBUTOR")
 
 #: Families used for domain and range checks.
 ITEM_TYPES = ("ISSUE", "PULL_REQUEST")
@@ -63,6 +63,9 @@ NODE_TYPES: dict[str, NodeType] = {
     "PULL_REQUEST": NodeType("PULL_REQUEST", "github", "A GitHub pull request."),
     "FILE": NodeType("FILE", "github", "A file changed by a pull request."),
     "MODULE": NodeType("MODULE", "github", "A top-level directory grouping files."),
+    "CONTRIBUTOR": NodeType(
+        "CONTRIBUTOR", "github", "A GitHub account assigned to repository work."
+    ),
     CONCEPT: NodeType(CONCEPT, "llm", "A technical concept extracted from discussion."),
 }
 
@@ -123,6 +126,14 @@ RELATION_PREDICATES: dict[str, Predicate] = {
         "A file lives in a module.",
         domain=("FILE",),
         range=("MODULE",),
+    ),
+    "assigned_to": Predicate(
+        "assigned_to",
+        "relation",
+        "github",
+        "GitHub currently assigns an issue or pull request to an account.",
+        domain=ITEM_TYPES,
+        range=("CONTRIBUTOR",),
     ),
     "implements": Predicate("implements", "relation", "llm", "Work realizes a proposal."),
     "conflicts_with": Predicate(

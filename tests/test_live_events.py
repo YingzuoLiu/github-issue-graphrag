@@ -243,6 +243,61 @@ def test_merge_state_is_taken_from_the_payload():
     assert item.files == ["a/b.py"]
 
 
+def test_assignees_are_presence_merged_and_a_stale_payload_cannot_restore_them():
+    state = LiveState(repo=REPO)
+    assigned = make_event(
+        "d-1",
+        "issues",
+        {
+            "action": "assigned",
+            "issue": issue_payload(
+                7,
+                assignees=[{"login": "octocat"}, {"login": "hubot"}],
+                updated_at="2024-05-01T00:00:00Z",
+            ),
+        },
+        "2024-05-01T00:00:00Z",
+    )
+    apply_event_to_records(state, assigned)
+    document_id = f"{REPO}#issue-7"
+    assert state.items[document_id].assignees == ["hubot", "octocat"]
+
+    # A partial payload that omits assignees must not erase the known set.
+    partial = issue_payload(7, updated_at="2024-05-02T00:00:00Z")
+    partial.pop("labels")
+    partial.pop("user")
+    apply_event_to_records(
+        state,
+        make_event(
+            "d-2",
+            "issues",
+            {"action": "edited", "issue": partial},
+            "2024-05-02T00:00:00Z",
+        ),
+    )
+    assert state.items[document_id].assignees == ["hubot", "octocat"]
+
+    apply_event_to_records(
+        state,
+        make_event(
+            "d-3",
+            "issues",
+            {
+                "action": "unassigned",
+                "issue": issue_payload(
+                    7,
+                    assignees=[],
+                    updated_at="2024-05-03T00:00:00Z",
+                ),
+            },
+            "2024-05-03T00:00:00Z",
+        ),
+    )
+    apply_event_to_records(state, assigned.model_copy(update={"delivery_id": "d-late"}))
+
+    assert state.items[document_id].assignees == []
+
+
 def test_unknown_event_types_are_refused():
     state = LiveState(repo=REPO)
     event = make_event("d-1", "release", {"action": "published"}, "2024-05-01T00:00:00Z")

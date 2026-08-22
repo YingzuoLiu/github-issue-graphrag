@@ -196,4 +196,23 @@ def test_state_reader_migrates_record_versions_and_legacy_tombstones(
     migrated = restored.items["trustgraph-ai/trustgraph#issue-875"]
 
     assert migrated.field_versions["title"].effective_at == migrated.effective_at
+    assert migrated.field_versions["assignees"].effective_at == migrated.effective_at
     assert migrated.deleted_comments["7"].key() == ("2024-05-05T12:00:00Z", "")
+
+
+def test_state_reader_backfills_only_a_new_field_version(seeded_state, tmp_path):
+    raw = seeded_state.model_dump()
+    item = raw["items"]["trustgraph-ai/trustgraph#issue-875"]
+    title_version = item["field_versions"]["title"]
+    item.pop("assignees")
+    item["field_versions"].pop("assignees")
+
+    path = tmp_path / "pre-assignee-state.json"
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(raw, handle)
+
+    migrated = read_state(path).items["trustgraph-ai/trustgraph#issue-875"]
+
+    assert migrated.assignees == []
+    assert migrated.field_versions["title"].model_dump() == title_version
+    assert migrated.field_versions["assignees"].key() == migrated.version_key()

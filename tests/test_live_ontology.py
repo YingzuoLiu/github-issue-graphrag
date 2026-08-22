@@ -5,6 +5,7 @@ from __future__ import annotations
 from conftest import REPO, make_event, pull_payload
 
 from issue_graphrag.live.extraction import FixtureExtractor, llm_facts_for_item
+from issue_graphrag.live.facts import ItemIndex, github_facts_for_item
 from issue_graphrag.live.indexer import apply_event
 from issue_graphrag.live.models import Evidence, Fact, LiveState, RepoItem
 from issue_graphrag.live.ontology import (
@@ -35,13 +36,14 @@ def test_an_inferred_fact_may_not_assert_a_github_predicate():
         inferred("PR #950", "closes", "Issue #944"),
         inferred("Issue #944", "references", "Issue #901"),
         inferred("PR #950", "touches", "kafka_backend.py"),
+        inferred("Issue #944", "assigned_to", "@octocat"),
         inferred("Issue #944", "has_state", "closed", kind="entity"),
     ]
 
     kept, rejected = validate_inferred(facts)
 
     assert kept == []
-    assert len(rejected) == 4
+    assert len(rejected) == 5
     assert all("may only be asserted by GitHub" in reason or "not an inferable" in reason
                for _, reason in rejected)
 
@@ -64,6 +66,9 @@ def test_domain_and_range_are_only_enforced_for_known_types():
     assert permits("closes", "PULL_REQUEST", "ISSUE")
     assert not permits("closes", "ISSUE", "ISSUE")
     assert not permits("touches", "ISSUE", "FILE")
+    assert permits("assigned_to", "ISSUE", "CONTRIBUTOR")
+    assert not permits("assigned_to", "ISSUE", "FILE")
+    assert not permits("assigned_to", "CONTRIBUTOR", "ISSUE")
     # An unknown endpoint type must not silently drop the edge.
     assert permits("closes", None, "ISSUE")
 
@@ -132,3 +137,29 @@ def test_a_violating_relation_is_dropped_at_projection_time():
 
     assert graph.has_node("Issue #1") and graph.has_node("a.py")
     assert not graph.has_edge("Issue #1", "a.py")
+
+
+def test_qualified_references_only_target_the_current_repository():
+    issue = RepoItem(kind="issue", repo=REPO, number=1)
+    local = RepoItem(
+        kind="pull_request",
+        repo=REPO,
+        number=2,
+        body=f"Fixes {REPO}#1",
+    )
+    cross_repo = local.model_copy(
+        update={"number": 3, "body": "Fixes someone-else/project#1"}
+    )
+    items = {item.document_id: item for item in (issue, local, cross_repo)}
+    index = ItemIndex(items)
+
+    local_facts = github_facts_for_item(local, index, "2024-05-01T00:00:00Z")
+    cross_repo_facts = github_facts_for_item(
+        cross_repo, index, "2024-05-01T00:00:00Z"
+    )
+
+    assert any(
+        fact.predicate == "closes" and fact.object == "Issue #1"
+        for fact in local_facts
+    )
+    assert all(fact.predicate not in {"closes", "references"} for fact in cross_repo_facts)

@@ -153,6 +153,7 @@ def render_opportunities(graph, caption: str) -> None:
                 "status": item.status,
                 "title": item.title,
                 "concepts": ", ".join(item.concepts),
+                "assignees": ", ".join(item.assignees),
                 "claimed by": ", ".join(item.claimed_by),
                 "blocked by": ", ".join(item.blocked_by),
             }

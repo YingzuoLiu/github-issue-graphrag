@@ -6,6 +6,7 @@ import random
 
 from conftest import REPO, issue_payload, make_event, pull_payload
 
+from issue_graphrag.live.contribution import opportunities
 from issue_graphrag.live.extraction import FixtureExtractor
 from issue_graphrag.live.indexer import NullExtractor, apply_event, bootstrap, rebuild, replay
 from issue_graphrag.live.models import Evidence, Fact, LiveState
@@ -253,6 +254,72 @@ def test_a_stale_payload_cannot_rewind_state(seeded_state, extractor):
 
     assert seeded_state.items[f"{REPO}#issue-944"].state == "closed"
     assert project_graph(seeded_state).nodes["Issue #944"]["state"] == "closed"
+
+
+def test_assignee_add_and_remove_are_temporal_and_rebuild_safe(seeded_state, extractor):
+    current = seeded_state.items[f"{REPO}#issue-944"]
+
+    def payload(assignees, updated_at):  # noqa: ANN001, ANN202 - compact fixture helper
+        return issue_payload(
+            944,
+            title=current.title,
+            body=current.body,
+            labels=[{"name": label} for label in current.labels],
+            assignees=[{"login": login} for login in assignees],
+            updated_at=updated_at,
+        )
+
+    assigned = apply_event(
+        seeded_state,
+        make_event(
+            "d-assign",
+            "issues",
+            {
+                "action": "assigned",
+                "issue": payload(["octocat"], "2024-05-09T09:00:00Z"),
+            },
+            "2024-05-09T09:00:00Z",
+        ),
+        extractor,
+    )
+    at_assignment = opportunities(project_graph(seeded_state, assigned.indexed_at))
+    assigned_item = next(item for item in at_assignment if item.number == 944)
+    assert assigned_item.status == "claimed"
+    assert assigned_item.assignees == ["@octocat"]
+
+    removed = apply_event(
+        seeded_state,
+        make_event(
+            "d-unassign",
+            "issues",
+            {
+                "action": "unassigned",
+                "issue": payload([], "2024-05-10T09:00:00Z"),
+            },
+            "2024-05-10T09:00:00Z",
+        ),
+        extractor,
+    )
+
+    current_item = next(
+        item for item in opportunities(project_graph(seeded_state)) if item.number == 944
+    )
+    assert current_item.status == "available"
+    assert current_item.assignees == []
+    assert any(
+        change.change == "invalidated" and change.fact.predicate == "assigned_to"
+        for change in removed.fact_changes
+    )
+
+    still_historical = next(
+        item
+        for item in opportunities(project_graph(seeded_state, assigned.indexed_at))
+        if item.number == 944
+    )
+    assert still_historical.status == "claimed"
+    assert graph_signature(project_graph(rebuild(seeded_state))) == graph_signature(
+        project_graph(seeded_state)
+    )
 
 
 # --------------------------------------------------------------------------

@@ -17,7 +17,14 @@ FactKey = tuple[str, str, str, str, str, str]
 ENTITY_PREDICATES = ("is_a", "has_state", "has_label")
 
 #: Relations GitHub states explicitly. These are never produced by the LLM.
-GITHUB_RELATIONS = ("references", "closes", "blocked_by", "touches", "belongs_to")
+GITHUB_RELATIONS = (
+    "references",
+    "closes",
+    "blocked_by",
+    "touches",
+    "belongs_to",
+    "assigned_to",
+)
 
 
 class Evidence(BaseModel):
@@ -124,6 +131,7 @@ VERSIONED_ITEM_FIELDS = (
     "merged",
     "merged_at",
     "labels",
+    "assignees",
     "author",
     "url",
     "created_at",
@@ -145,6 +153,7 @@ class RepoItem(BaseModel):
     merged: bool = False
     draft: bool = False
     labels: list[str] = Field(default_factory=list)
+    assignees: list[str] = Field(default_factory=list)
     author: str = ""
     url: str | None = None
     created_at: str | None = None
@@ -187,16 +196,18 @@ class RepoItem(BaseModel):
         return (self.effective_at or "", self.source_delivery_id)
 
     def seed_field_versions(self) -> None:
-        """Mark every field in a complete snapshot as observed at its record version."""
-        if self.field_versions:
-            return
+        """Mark unversioned snapshot fields as observed at the record version.
+
+        ``setdefault`` also migrates states written before a newly introduced
+        field existed without overwriting the independent versions already
+        recorded for older fields.
+        """
         version = SourceVersion(
             effective_at=self.effective_at or "",
             delivery_id=self.source_delivery_id,
         )
-        self.field_versions = {
-            field: version.model_copy() for field in VERSIONED_ITEM_FIELDS
-        }
+        for field in VERSIONED_ITEM_FIELDS:
+            self.field_versions.setdefault(field, version.model_copy())
 
     @property
     def document_id(self) -> str:
@@ -319,6 +330,7 @@ class Opportunity(BaseModel):
     labels: list[str] = Field(default_factory=list)
     concepts: list[str] = Field(default_factory=list)
     claimed_by: list[str] = Field(default_factory=list)
+    assignees: list[str] = Field(default_factory=list)
     blocked_by: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
     evidence: list[OpportunityEvidence] = Field(default_factory=list)

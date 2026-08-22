@@ -16,7 +16,7 @@ the same records.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from issue_graphrag.live.models import Comment, LiveState, RepoEvent, RepoItem, SourceVersion
 from issue_graphrag.live.timeutil import max_iso, to_iso
@@ -26,6 +26,8 @@ SUPPORTED_EVENT_ACTIONS: dict[str, frozenset[str] | None] = {
     "pull_request": None,
     "issue_comment": frozenset({"created", "edited", "deleted"}),
 }
+
+ItemKind = Literal["issue", "pull_request"]
 
 
 def supports_event(event_type: str, action: str) -> bool:
@@ -44,6 +46,16 @@ def _labels(payload: dict[str, Any]) -> list[str]:
     labels = payload.get("labels") or []
     names = [str(label.get("name", "")).strip() for label in labels if isinstance(label, dict)]
     return sorted({name for name in names if name})
+
+
+def _assignees(payload: dict[str, Any]) -> list[str]:
+    assignees = payload.get("assignees") or []
+    logins = [
+        str(assignee.get("login", "")).strip()
+        for assignee in assignees
+        if isinstance(assignee, dict)
+    ]
+    return sorted({login for login in logins if login})
 
 
 def _login(payload: dict[str, Any], key: str = "user") -> str:
@@ -70,7 +82,9 @@ def _document_id(repo: str, kind: str, number: int) -> str:
     return f"{repo}#{slug}-{number}"
 
 
-def resolve_kind(state: LiveState, repo: str, number: int, payload: dict[str, Any]) -> str:
+def resolve_kind(
+    state: LiveState, repo: str, number: int, payload: dict[str, Any]
+) -> ItemKind:
     """Decide whether a payload describes an issue or a pull request.
 
     GitHub delivers pull request comments under the ``issue`` key, marked only by
@@ -88,7 +102,7 @@ def merge_item(
     existing: RepoItem | None,
     repo: str,
     payload: dict[str, Any],
-    kind: str,
+    kind: ItemKind,
     delivery_id: str,
     files: list[str] | None = None,
 ) -> RepoItem:
@@ -141,6 +155,8 @@ def merge_item(
             assign("merged", True)
     if "labels" in payload:
         assign("labels", _labels(payload))
+    if "assignees" in payload:
+        assign("assignees", _assignees(payload))
     if "user" in payload:
         assign("author", _login(payload))
     if payload.get("html_url"):
@@ -164,7 +180,7 @@ def upsert_item(
     state: LiveState,
     repo: str,
     payload: dict[str, Any],
-    kind: str,
+    kind: ItemKind,
     delivery_id: str,
     files: list[str] | None = None,
 ) -> tuple[str, bool]:

@@ -7,13 +7,9 @@ import networkx as nx
 
 from issue_graphrag.live.facts import basename
 from issue_graphrag.live.models import Fact, GraphDelta, LiveState
-from issue_graphrag.live.ontology import permits
+from issue_graphrag.live.ontology import GITHUB_NODE_TYPES, permits
 
 _NUMBER = re.compile(r"#(\d+)$")
-
-#: Node types GitHub states outright. They win over any LLM-assigned type.
-_GITHUB_TYPES = ("ISSUE", "PULL_REQUEST", "FILE", "MODULE")
-
 
 def _edge_key(subject: str, obj: str) -> tuple[str, str]:
     return (subject, obj) if subject <= obj else (obj, subject)
@@ -62,9 +58,9 @@ def alias_map(facts: list[Fact]) -> dict[str, str]:
 
 
 def _better_type(current: str, candidate: str, candidate_origin: str) -> str:
-    if candidate_origin == "github" and candidate in _GITHUB_TYPES:
+    if candidate_origin == "github" and candidate in GITHUB_NODE_TYPES:
         return candidate
-    if current in _GITHUB_TYPES:
+    if current in GITHUB_NODE_TYPES:
         return current
     if current in ("", "CONCEPT") and candidate:
         return candidate
