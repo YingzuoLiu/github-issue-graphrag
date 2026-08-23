@@ -1,0 +1,455 @@
+{
+  "schema_version": 1,
+  "repo": "getzep/graphiti",
+  "snapshot_fingerprint": "212c58b3855d01e153dddde6d304869212c51af20ab80d19790ab300bb541184",
+  "opportunities": [
+    {
+      "number": 868,
+      "title": "[BUG] Cannot get minimal example to work with Ollama",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #868",
+          "url": "https://github.com/getzep/graphiti/issues/868"
+        }
+      ]
+    },
+    {
+      "number": 1111,
+      "title": "Bug Report: Custom Edge Attributes Not Extracted for First-Time Edges",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1111",
+          "url": "https://github.com/getzep/graphiti/issues/1111"
+        }
+      ]
+    },
+    {
+      "number": 1135,
+      "title": "[BUG] small model defaults to hardcoded values when using MCP server",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1135",
+          "url": "https://github.com/getzep/graphiti/issues/1135"
+        }
+      ]
+    },
+    {
+      "number": 1213,
+      "title": "[BUG]",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1213",
+          "url": "https://github.com/getzep/graphiti/issues/1213"
+        }
+      ]
+    },
+    {
+      "number": 1397,
+      "title": "label_propagation has unbounded while True, oscillates forever on mid-sized graphs",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1397",
+          "url": "https://github.com/getzep/graphiti/issues/1397"
+        }
+      ]
+    },
+    {
+      "number": 1602,
+      "title": "RFC: Salience-Based Fact Filtering and Multi-Tier Memory",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1602",
+          "url": "https://github.com/getzep/graphiti/issues/1602"
+        }
+      ]
+    },
+    {
+      "number": 1736,
+      "title": "[BUG] CONFIG_PATH env var silently overwritten by always-truthy --config CLI default",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1736",
+          "url": "https://github.com/getzep/graphiti/issues/1736"
+        }
+      ]
+    },
+    {
+      "number": 1745,
+      "title": "mcp_server: no way to disable DNS-rebinding host validation — 421 behind any reverse proxy",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1745",
+          "url": "https://github.com/getzep/graphiti/issues/1745"
+        }
+      ]
+    },
+    {
+      "number": 1746,
+      "title": "mcp_server: structured extraction unusable with OpenAI-compatible endpoints (Responses-API-only); structured_output_mode documented but unimplemented",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1746",
+          "url": "https://github.com/getzep/graphiti/issues/1746"
+        }
+      ]
+    },
+    {
+      "number": 1757,
+      "title": "[Bug] `apply_capped_attributes`'s `dropped` field-name set is discarded at every call site — silent, unsignaled data loss",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1757",
+          "url": "https://github.com/getzep/graphiti/issues/1757"
+        }
+      ]
+    },
+    {
+      "number": 1771,
+      "title": "Pre-publication review: our reading of Graphiti's deduplication write path (corrections welcome by 2026-08-30)",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1771",
+          "url": "https://github.com/getzep/graphiti/issues/1771"
+        }
+      ]
+    },
+    {
+      "number": 1789,
+      "title": "Requesting comment on a soon-to-be-published article",
+      "status": "available",
+      "score": 1.0,
+      "reasons": [
+        "open issue (+1.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1789",
+          "url": "https://github.com/getzep/graphiti/issues/1789"
+        }
+      ]
+    },
+    {
+      "number": 992,
+      "title": "[BUG]  OOM Crash: `build_communities` Executes N Separate Queries Causing Process Death on Large Graphs",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1786 (open) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #992",
+          "url": "https://github.com/getzep/graphiti/issues/992"
+        },
+        {
+          "label": "PR #1786 (open) closes this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1786"
+        }
+      ]
+    },
+    {
+      "number": 1469,
+      "title": "[BUG] add_episode crashes with Kuzu C-extension access violation on Windows (kuzu 0.11.3, graphiti-core 0.29.0)",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already assigned to @prasmussen15 (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1469",
+          "url": "https://github.com/getzep/graphiti/issues/1469"
+        },
+        {
+          "label": "assigned to @prasmussen15",
+          "url": "https://github.com/getzep/graphiti/issues/1469"
+        }
+      ]
+    },
+    {
+      "number": 1600,
+      "title": "Optimisation - ACO in node_operations.py",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already assigned to @vedantRaikar (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1600",
+          "url": "https://github.com/getzep/graphiti/issues/1600"
+        },
+        {
+          "label": "assigned to @vedantRaikar",
+          "url": "https://github.com/getzep/graphiti/issues/1600"
+        }
+      ]
+    },
+    {
+      "number": 1651,
+      "title": "MCP server: get_episodes and delete_episode query the wrong graph on FalkorDB (bypass per-group routing)",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1703 (open), PR #1765 (open) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1651",
+          "url": "https://github.com/getzep/graphiti/issues/1651"
+        },
+        {
+          "label": "PR #1703 (open) references this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1703"
+        },
+        {
+          "label": "PR #1765 (open) closes this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1765"
+        }
+      ]
+    },
+    {
+      "number": 1666,
+      "title": "Contradiction detection in EdgeDuplicate (dedupe judge) collapses on non-reasoning small_models — a reasoning-first response schema restores it (measured)",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1729 (open), PR #1784 (open) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1666",
+          "url": "https://github.com/getzep/graphiti/issues/1666"
+        },
+        {
+          "label": "PR #1729 (open) references this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1729"
+        },
+        {
+          "label": "PR #1784 (open) closes this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1784"
+        }
+      ]
+    },
+    {
+      "number": 1728,
+      "title": "Bug: Edge invalidation searches the whole graph, so unrelated facts retire each other",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1729 (open) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1728",
+          "url": "https://github.com/getzep/graphiti/issues/1728"
+        },
+        {
+          "label": "PR #1729 (open) closes this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1729"
+        }
+      ]
+    },
+    {
+      "number": 1751,
+      "title": "OpenAI models rejected with 400 `invalid_json_schema` on OpenRouter",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1752 (open) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1751",
+          "url": "https://github.com/getzep/graphiti/issues/1751"
+        },
+        {
+          "label": "PR #1752 (open) references this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1752"
+        }
+      ]
+    },
+    {
+      "number": 1755,
+      "title": "[Bug] `_get_or_create_saga` re-fetch drops `first_episode_uuid`/`last_episode_uuid`, causing silent overwrite on the 2nd+ episode",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1761 (open) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1755",
+          "url": "https://github.com/getzep/graphiti/issues/1755"
+        },
+        {
+          "label": "PR #1761 (open) closes this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1761"
+        }
+      ]
+    },
+    {
+      "number": 1756,
+      "title": "[Bug] `graphiti-core[falkordb]` is broken on a clean install: unpinned `redis` resolves 8.1.0, `FalkorDriver` construction raises `TypeError`",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1768 (draft) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1756",
+          "url": "https://github.com/getzep/graphiti/issues/1756"
+        },
+        {
+          "label": "PR #1768 (draft) closes this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1768"
+        }
+      ]
+    },
+    {
+      "number": 1758,
+      "title": "[Bug] `handle_multiple_group_ids` raises `TypeError: got multiple values for argument` when `group_ids` and `driver` are both passed positionally with >1 group_id",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1760 (open) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1758",
+          "url": "https://github.com/getzep/graphiti/issues/1758"
+        },
+        {
+          "label": "PR #1760 (open) closes this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1760"
+        }
+      ]
+    },
+    {
+      "number": 1759,
+      "title": "[RFC] Optional `timeout` and `extra_body` fields on `LLMConfig`",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1783 (open) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1759",
+          "url": "https://github.com/getzep/graphiti/issues/1759"
+        },
+        {
+          "label": "PR #1783 (open) closes this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1783"
+        }
+      ]
+    },
+    {
+      "number": 1769,
+      "title": "[Bug] EpisodicNode.episode_metadata is documented as public surface but is never persisted or read -- always None",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1785 (open) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1769",
+          "url": "https://github.com/getzep/graphiti/issues/1769"
+        },
+        {
+          "label": "PR #1785 (open) closes this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1785"
+        }
+      ]
+    },
+    {
+      "number": 1781,
+      "title": "RFC: PostGraph driver — PostgreSQL-backed graph backend using post-graph library",
+      "status": "claimed",
+      "score": 0.0,
+      "reasons": [
+        "open issue (+1.00)",
+        "already picked up by PR #1777 (open) (-2.00)"
+      ],
+      "evidence": [
+        {
+          "label": "Issue #1781",
+          "url": "https://github.com/getzep/graphiti/issues/1781"
+        },
+        {
+          "label": "PR #1777 (open) closes this issue",
+          "url": "https://github.com/getzep/graphiti/pull/1777"
+        }
+      ]
+    }
+  ]
+}

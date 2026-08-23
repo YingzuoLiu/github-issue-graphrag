@@ -12,7 +12,8 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Mapping
 
 import requests
 
@@ -23,7 +24,7 @@ from issue_graphrag.live.indexer import NullExtractor, bootstrap
 from issue_graphrag.live.models import Opportunity
 from issue_graphrag.live.projection import project_graph
 from issue_graphrag.live.records import seed_items
-from issue_graphrag.live.timeutil import now_utc, to_iso
+from issue_graphrag.live.timeutil import now_utc, parse_iso, to_iso
 
 DEFAULT_PILOT_REPOS = (
     "getzep/graphiti",
@@ -31,6 +32,8 @@ DEFAULT_PILOT_REPOS = (
     "trustgraph-ai/trustgraph",
 )
 DEFAULT_CONSTRAINT_CONTRADICTION_THRESHOLD = 0.05
+PILOT_SNAPSHOT_SCHEMA_VERSION = 1
+CONTRIBUTION_REGRESSION_SCHEMA_VERSION = 1
 
 _ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)$")
 
@@ -53,6 +56,147 @@ class PilotSnapshot:
     @property
     def pulls(self) -> list[dict[str, Any]]:
         return [item for item in self.raw_items if "pull_request" in item]
+
+
+def monitoring_run_id(value: str) -> str:
+    """Turn a UTC timestamp into a filename-safe, sortable monitoring id."""
+    return parse_iso(value).strftime("%Y%m%dT%H%M%SZ")
+
+
+def create_monitoring_run_directory(parent: Path, value: str) -> Path:
+    """Reserve an immutable directory for one time-varying pilot run."""
+    destination = parent / monitoring_run_id(value)
+    destination.mkdir(parents=True, exist_ok=False)
+    return destination
+
+
+def _compact_actor(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {"login": ""}
+    return {"login": str(value.get("login") or "")}
+
+
+def _compact_raw_item(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain the public GitHub fields that can affect Pilot 0 or its seed."""
+    item = {
+        key: raw.get(key)
+        for key in (
+            "number",
+            "title",
+            "body",
+            "state",
+            "locked",
+            "draft",
+            "merged",
+            "created_at",
+            "updated_at",
+            "closed_at",
+            "merged_at",
+            "html_url",
+            "comments",
+            "issue_dependencies_summary",
+        )
+        if key in raw
+    }
+    item["labels"] = [
+        {"name": str(label.get("name") or "")}
+        for label in raw.get("labels") or []
+        if isinstance(label, dict) and label.get("name")
+    ]
+    item["assignees"] = [
+        _compact_actor(assignee)
+        for assignee in raw.get("assignees") or []
+        if isinstance(assignee, dict) and assignee.get("login")
+    ]
+    item["user"] = _compact_actor(raw.get("user"))
+    if "pull_request" in raw:
+        # Presence, not the nested API URLs, distinguishes PR rows returned by
+        # GitHub's shared issues endpoint.
+        item["pull_request"] = {}
+    return item
+
+
+def _compact_comment(raw: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": raw.get("id"),
+        "issue_url": raw.get("issue_url"),
+        "body": raw.get("body"),
+        "user": _compact_actor(raw.get("user")),
+        "html_url": raw.get("html_url"),
+        "created_at": raw.get("created_at"),
+        "updated_at": raw.get("updated_at"),
+    }
+
+
+def snapshot_to_payload(
+    snapshot: PilotSnapshot,
+    *,
+    collection_parameters: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Serialize a compact, replayable Pilot 0 snapshot with provenance."""
+    raw_items = [_compact_raw_item(raw) for raw in snapshot.raw_items]
+    recent_comments = [_compact_comment(raw) for raw in snapshot.recent_comments]
+    compacted = make_snapshot(
+        snapshot.repo,
+        raw_items,
+        recent_comments,
+        fetched_at=snapshot.fetched_at,
+        request_count=snapshot.request_count,
+        write_request_count=snapshot.write_request_count,
+    )
+    if compacted.fingerprint != snapshot.fingerprint:
+        raise ValueError("compacting the pilot snapshot changed its fingerprint")
+    return {
+        "schema_version": PILOT_SNAPSHOT_SCHEMA_VERSION,
+        "source": {
+            "provider": "GitHub REST API",
+            "repo": snapshot.repo,
+            "api_url": f"https://api.github.com/repos/{snapshot.repo}",
+            "fetched_at": snapshot.fetched_at,
+        },
+        "collection": {
+            "github_read_requests": snapshot.request_count,
+            "github_write_requests": snapshot.write_request_count,
+            "parameters": dict(collection_parameters or {}),
+        },
+        "snapshot_fingerprint": snapshot.fingerprint,
+        "raw_items": raw_items,
+        "recent_comments": recent_comments,
+    }
+
+
+def snapshot_from_payload(payload: Mapping[str, Any]) -> PilotSnapshot:
+    """Restore and integrity-check a snapshot produced by ``snapshot_to_payload``."""
+    if payload.get("schema_version") != PILOT_SNAPSHOT_SCHEMA_VERSION:
+        raise ValueError("unsupported pilot snapshot schema_version")
+    source = payload.get("source")
+    collection = payload.get("collection")
+    raw_items = payload.get("raw_items")
+    recent_comments = payload.get("recent_comments")
+    if not isinstance(source, dict) or not isinstance(collection, dict):
+        raise ValueError("pilot snapshot source and collection must be objects")
+    if not isinstance(raw_items, list) or not all(isinstance(row, dict) for row in raw_items):
+        raise ValueError("pilot snapshot raw_items must be a list of objects")
+    if not isinstance(recent_comments, list) or not all(
+        isinstance(row, dict) for row in recent_comments
+    ):
+        raise ValueError("pilot snapshot recent_comments must be a list of objects")
+
+    snapshot = make_snapshot(
+        str(source.get("repo") or ""),
+        raw_items,
+        recent_comments,
+        fetched_at=str(source.get("fetched_at") or ""),
+        request_count=int(collection.get("github_read_requests") or 0),
+        write_request_count=int(collection.get("github_write_requests") or 0),
+    )
+    expected = str(payload.get("snapshot_fingerprint") or "")
+    if snapshot.fingerprint != expected:
+        raise ValueError(
+            "pilot snapshot fingerprint mismatch: "
+            f"expected {expected or '<missing>'}, calculated {snapshot.fingerprint}"
+        )
+    return snapshot
 
 
 class CountingSession:
@@ -409,6 +553,33 @@ def _rank_snapshot(
             item.assignees = []
     state = bootstrap(snapshot.repo, items, NullExtractor())
     return opportunities(project_graph(state))
+
+
+def contribution_regression_signature(snapshot: PilotSnapshot) -> dict[str, Any]:
+    """Return the exact deterministic recommendation contract for a fixture.
+
+    This deliberately excludes time-varying Pilot 0 comparison metrics. A
+    checked-in golden file should fail when production status, score, reasons,
+    evidence or ordering changes, forcing an explicit review of the new
+    expected contract.
+    """
+    ranked = _rank_snapshot(snapshot, include_assignees=True)
+    return {
+        "schema_version": CONTRIBUTION_REGRESSION_SCHEMA_VERSION,
+        "repo": snapshot.repo,
+        "snapshot_fingerprint": snapshot.fingerprint,
+        "opportunities": [
+            {
+                "number": item.number,
+                "title": item.title,
+                "status": item.status,
+                "score": item.score,
+                "reasons": item.reasons,
+                "evidence": [row.model_dump(mode="json") for row in item.evidence],
+            }
+            for item in ranked
+        ],
+    }
 
 
 def evaluate_snapshot(

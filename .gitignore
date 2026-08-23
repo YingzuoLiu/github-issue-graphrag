@@ -45,3 +45,6 @@ Thumbs.db
 logs/
 *.log
 *.egg-info/
+
+# Time-varying pilot monitoring artifacts
+eval/pilot_runs/

@@ -11,9 +11,12 @@ from issue_graphrag.pilot import (
     DEFAULT_CONSTRAINT_CONTRADICTION_THRESHOLD,
     DEFAULT_PILOT_REPOS,
     GitHubPilotClient,
+    create_monitoring_run_directory,
     evaluate_snapshot,
+    monitoring_run_id,
     render_markdown,
 )
+from issue_graphrag.live.timeutil import now_utc, to_iso
 
 
 def main() -> None:
@@ -34,8 +37,22 @@ def main() -> None:
         type=float,
         default=DEFAULT_CONSTRAINT_CONTRADICTION_THRESHOLD,
     )
-    parser.add_argument("--json-output", type=Path, default=Path("eval/pilot_results.json"))
-    parser.add_argument("--markdown-output", type=Path, default=Path("eval/pilot_results.md"))
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("eval/pilot_runs"),
+        help="parent for immutable <UTC run id>/results.json and report.md outputs",
+    )
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        help="optional explicit JSON path; must be paired with --markdown-output",
+    )
+    parser.add_argument(
+        "--markdown-output",
+        type=Path,
+        help="optional explicit Markdown path; must be paired with --json-output",
+    )
     args = parser.parse_args()
 
     if args.issue_limit < 1 or args.pull_limit < 1:
@@ -48,7 +65,11 @@ def main() -> None:
         parser.error("--top-k must be positive")
     if not 0 <= args.constraint_contradiction_threshold <= 1:
         parser.error("--constraint-contradiction-threshold must be between 0 and 1")
+    if bool(args.json_output) != bool(args.markdown_output):
+        parser.error("--json-output and --markdown-output must be provided together")
 
+    run_started_at = to_iso(now_utc())
+    run_id = monitoring_run_id(run_started_at)
     settings = load_settings()
     client = GitHubPilotClient(token=settings.github_token)
     results = []
@@ -79,6 +100,8 @@ def main() -> None:
     write_requests = client.write_request_count
     envelope = {
         "evaluation": "real-repository-contribution-pilot-0",
+        "run_id": run_id,
+        "run_started_at": run_started_at,
         "read_only": write_requests == 0,
         "github_write_requests": write_requests,
         "configuration": {
@@ -95,17 +118,49 @@ def main() -> None:
         },
         "results": results,
     }
-    args.json_output.parent.mkdir(parents=True, exist_ok=True)
-    args.markdown_output.parent.mkdir(parents=True, exist_ok=True)
-    args.json_output.write_text(
+    if args.json_output is not None and args.markdown_output is not None:
+        json_output = args.json_output
+        markdown_output = args.markdown_output
+        if json_output.exists() or markdown_output.exists():
+            parser.error("explicit output paths must not already exist")
+        json_output.parent.mkdir(parents=True, exist_ok=True)
+        markdown_output.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        try:
+            run_directory = create_monitoring_run_directory(
+                args.output_dir, run_started_at
+            )
+        except FileExistsError:
+            parser.error(
+                f"monitoring run directory already exists: {args.output_dir / run_id}"
+            )
+        json_output = run_directory / "results.json"
+        markdown_output = run_directory / "report.md"
+
+    json_output.write_text(
         json.dumps(envelope, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    args.markdown_output.write_text(
+    markdown_output.write_text(
         render_markdown(results, top_k=args.top_k),
         encoding="utf-8",
     )
-    print(f"Wrote {args.json_output} and {args.markdown_output}")
+    print(f"Wrote immutable monitoring run {run_id}: {json_output} and {markdown_output}")
+
+    failures: list[str] = []
+    if write_requests:
+        failures.append(f"measured {write_requests} GitHub write request(s)")
+    for result in results:
+        checks = result["engineering_checks"]
+        for key in (
+            "constraint_contradiction_rate_pass",
+            "all_non_available_results_have_causal_evidence_url",
+            "github_write_requests_are_zero",
+        ):
+            if not checks[key]:
+                failures.append(f"{result['repo']}: {key}=false")
+    if failures:
+        raise SystemExit("Pilot engineering gate failed: " + "; ".join(failures))
 
 
 if __name__ == "__main__":

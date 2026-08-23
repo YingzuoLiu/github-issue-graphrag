@@ -1,0 +1,40 @@
+name: Contribution pilot monitoring
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contribution-pilot-monitoring
+  cancel-in-progress: false
+
+jobs:
+  pilot:
+    name: Read-only real-repository pilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project
+        run: python -m pip install -e .
+      - name: Run timestamped read-only pilot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/run_real_repo_pilot.py
+      - name: Upload timestamped pilot report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contribution-pilot-${{ github.run_id }}
+          path: eval/pilot_runs/
+          if-no-files-found: error
+          retention-days: 30

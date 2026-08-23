@@ -121,6 +121,11 @@ assigned issues were still being called available. See
 [the read-only real-repository pilot](#read-only-real-repository-pilot) for what that ablation does
 and does not support.
 
+**Contribution regression evidence, 1 frozen real Graphiti snapshot:** 25 issues and 25 pull
+requests replay offline in CI, locking recommendation ordering, status, score, reasons and evidence.
+The separate live pilot now writes immutable timestamped reports and runs weekly as read-only
+monitoring; changing current GitHub data cannot silently rewrite the deterministic release gate.
+
 ## What this project does
 
 The batch pipeline turns GitHub issues into a small repository knowledge graph:
@@ -1044,6 +1049,7 @@ This project demonstrates:
 - How to separate a source clock from an ingestion clock so out-of-order events still converge
 - How to put a fast, durable at-least-once boundary in front of expensive graph extraction
 - How to write a consistency check that is capable of failing
+- How to separate a reviewed golden snapshot from time-varying live monitoring
 
 ## Status
 
@@ -1051,6 +1057,8 @@ This project demonstrates:
 - Live contribution graph: v0.3 vertical slice complete, with deterministic fixture replay and a
   real signed webhook receiver backed by a durable local worker inbox; a three-repository
   read-only pilot verifies sampled platform-fact integration and records its limits.
+- Productization development: `0.4.0.dev0`; M1 freezes a real Graphiti contribution contract and
+  adds timestamped, zero-write scheduled pilot monitoring without changing scoring semantics.
 
 ## Future work
 
