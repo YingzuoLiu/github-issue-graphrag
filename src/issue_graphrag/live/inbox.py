@@ -52,6 +52,7 @@ class InboxDelivery:
 class SemanticJob:
     document_id: str
     content_signature: str
+    semantic_namespace: str
     trigger_delivery_id: str
     status: SemanticJobStatus
     next_unit_index: int
@@ -130,6 +131,7 @@ class DeliveryInbox:
                 CREATE TABLE IF NOT EXISTS semantic_jobs (
                     document_id TEXT PRIMARY KEY,
                     content_signature TEXT NOT NULL,
+                    semantic_namespace TEXT NOT NULL DEFAULT '',
                     trigger_delivery_id TEXT NOT NULL,
                     status TEXT NOT NULL CHECK (
                         status IN ('pending', 'processing', 'deferred')
@@ -153,6 +155,15 @@ class DeliveryInbox:
             }
             if "lease_id" not in columns:
                 connection.execute("ALTER TABLE deliveries ADD COLUMN lease_id TEXT")
+            semantic_columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(semantic_jobs)").fetchall()
+            }
+            if "semantic_namespace" not in semantic_columns:
+                connection.execute(
+                    "ALTER TABLE semantic_jobs "
+                    "ADD COLUMN semantic_namespace TEXT NOT NULL DEFAULT ''"
+                )
 
     @staticmethod
     def _record(row: sqlite3.Row | None) -> InboxDelivery | None:
@@ -178,6 +189,7 @@ class DeliveryInbox:
         return SemanticJob(
             document_id=row["document_id"],
             content_signature=row["content_signature"],
+            semantic_namespace=row["semantic_namespace"],
             trigger_delivery_id=row["trigger_delivery_id"],
             status=row["status"],
             next_unit_index=int(row["next_unit_index"]),
@@ -461,6 +473,7 @@ class DeliveryInbox:
         trigger_delivery_id: str,
         total_units: int,
         now: str,
+        semantic_namespace: str = "",
     ) -> SemanticEnqueueOutcome:
         """Make one document/content version durably eligible for enrichment."""
         if total_units < 0:
@@ -469,21 +482,24 @@ class DeliveryInbox:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT content_signature, status FROM semantic_jobs WHERE document_id = ?",
+                """SELECT content_signature, semantic_namespace, status
+                FROM semantic_jobs WHERE document_id = ?""",
                 (document_id,),
             ).fetchone()
             if existing is None:
                 connection.execute(
                     """
                     INSERT INTO semantic_jobs (
-                        document_id, content_signature, trigger_delivery_id, status,
+                        document_id, content_signature, semantic_namespace,
+                        trigger_delivery_id, status,
                         next_unit_index, total_units, attempts, enqueued_at, updated_at,
                         next_attempt_at
-                    ) VALUES (?, ?, ?, 'pending', 0, ?, 0, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, 'pending', 0, ?, 0, ?, ?, ?)
                     """,
                     (
                         document_id,
                         content_signature,
+                        semantic_namespace,
                         trigger_delivery_id,
                         total_units,
                         moment,
@@ -493,7 +509,10 @@ class DeliveryInbox:
                 )
                 return "enqueued"
 
-            if existing["content_signature"] == content_signature:
+            if (
+                existing["content_signature"] == content_signature
+                and existing["semantic_namespace"] == semantic_namespace
+            ):
                 connection.execute(
                     """
                     UPDATE semantic_jobs
@@ -511,7 +530,8 @@ class DeliveryInbox:
             connection.execute(
                 """
                 UPDATE semantic_jobs
-                SET content_signature = ?, trigger_delivery_id = ?, status = 'pending',
+                SET content_signature = ?, semantic_namespace = ?,
+                    trigger_delivery_id = ?, status = 'pending',
                     next_unit_index = 0, total_units = ?, attempts = 0,
                     enqueued_at = ?, updated_at = ?, claimed_at = NULL, lease_id = NULL,
                     next_attempt_at = ?, last_error = NULL
@@ -519,6 +539,7 @@ class DeliveryInbox:
                 """,
                 (
                     content_signature,
+                    semantic_namespace,
                     trigger_delivery_id,
                     total_units,
                     moment,

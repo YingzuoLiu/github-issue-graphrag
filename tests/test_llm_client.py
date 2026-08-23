@@ -79,6 +79,9 @@ def test_openrouter_structured_request_is_exact_and_usage_is_audit_metadata():
         "provider": {"require_parameters": True},
     }
     assert "models" not in request["json"]
+    # OpenRouter now includes non-streaming usage automatically; its former
+    # usage.include switch is deprecated and intentionally not sent.
+    assert "usage" not in request["json"]
     assert result.metadata.requested_model == "google/gemini-3.1-flash-lite"
     assert result.metadata.actual_model == "google/gemini-3.1-flash-lite-202608"
     assert result.metadata.provider == "Google AI Studio"
@@ -86,3 +89,35 @@ def test_openrouter_structured_request_is_exact_and_usage_is_audit_metadata():
     assert result.metadata.input_tokens == 41
     assert result.metadata.output_tokens == 9
     assert result.metadata.cost_usd == 0.000024
+    assert result.metadata.usage_is_complete
+
+
+def test_incomplete_openrouter_usage_is_explicit_instead_of_looking_like_free_usage():
+    class MissingCostResponse(FakeResponse):
+        def json(self):
+            payload = super().json()
+            payload["usage"].pop("cost")
+            return payload
+
+    class MissingCostSession(FakeSession):
+        def post(self, url, **kwargs):  # noqa: ANN001
+            self.calls.append((url, kwargs))
+            return MissingCostResponse()
+
+    client = OpenAICompatibleClient(
+        "https://openrouter.ai/api/v1",
+        "secret",
+        "google/gemini-3.1-flash-lite",
+        max_retries=1,
+        session=MissingCostSession(),
+    )
+
+    result = client.complete_structured(
+        "extract this",
+        schema_name="github_issue_graph_extraction",
+        schema=EXTRACTION_RESPONSE_SCHEMA,
+        max_tokens=800,
+    )
+
+    assert result.metadata.cost_usd == 0
+    assert not result.metadata.usage_is_complete

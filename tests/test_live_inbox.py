@@ -210,6 +210,44 @@ def test_new_content_signature_replaces_deferred_cursor_durably(tmp_path):
     assert restored.status == "pending"
 
 
+def test_new_semantic_namespace_replaces_deferred_cursor_for_same_content(tmp_path):
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    document_id = "owner/repo#issue-1"
+    inbox.upsert_semantic_job(
+        document_id=document_id,
+        content_signature="same-content",
+        semantic_namespace="namespace-a",
+        trigger_delivery_id="seed",
+        total_units=3,
+        now=NOW,
+    )
+    job = inbox.claim_semantic_job(now=NOW, lease_seconds=30)
+    assert job is not None and job.lease_id is not None
+    inbox.advance_semantic_job(document_id, job.lease_id, 2, now=NOW)
+    inbox.defer_semantic_job(
+        document_id,
+        job.lease_id,
+        "batch",
+        now=NOW,
+        retry_delay_seconds=0,
+    )
+
+    outcome = inbox.upsert_semantic_job(
+        document_id=document_id,
+        content_signature="same-content",
+        semantic_namespace="namespace-b",
+        trigger_delivery_id="seed",
+        total_units=3,
+        now="2024-06-01T10:00:01Z",
+    )
+
+    assert outcome == "replaced"
+    restored = DeliveryInbox(tmp_path / "inbox.sqlite").get_semantic_job(document_id)
+    assert restored is not None
+    assert restored.semantic_namespace == "namespace-b"
+    assert restored.next_unit_index == 0
+
+
 def test_deferred_long_document_rotates_behind_less_attempted_documents(tmp_path):
     inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
     for document_id in ("owner/repo#issue-1", "owner/repo#issue-2"):

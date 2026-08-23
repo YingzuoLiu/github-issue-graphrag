@@ -7,11 +7,18 @@ import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
-from issue_graphrag.indexing.extractor import extraction_prompt
+from issue_graphrag.indexing.extractor import (
+    EXTRACTION_RESPONSE_SCHEMA_SHA256,
+    extraction_prompt,
+)
+from issue_graphrag.live.documents import LIVE_CHUNK_MAX_CHARS, LIVE_CHUNK_OVERLAP
 from issue_graphrag.live.extraction import (
     ExtractionValidationError,
+    EXTRACTION_REQUIRE_PARAMETERS,
+    EXTRACTION_SCHEMA_NAME,
     LLMExtractor,
     UnitExtraction,
 )
@@ -34,17 +41,51 @@ class ExtractionIdentity:
     prompt_version: str = EXTRACTION_PROMPT_VERSION
     prompt_sha256: str = ENTITY_EXTRACTION_PROMPT_SHA256
     extraction_schema_version: str = EXTRACTION_SCHEMA_VERSION
+    extraction_schema_sha256: str = EXTRACTION_RESPONSE_SCHEMA_SHA256
+    schema_name: str = EXTRACTION_SCHEMA_NAME
+    strict_json_schema: bool = True
+    max_output_tokens: int = 800
+    chunk_max_chars: int = LIVE_CHUNK_MAX_CHARS
+    chunk_overlap: int = LIVE_CHUNK_OVERLAP
+    temperature: float = 0.0
+    require_parameters: bool = EXTRACTION_REQUIRE_PARAMETERS
+
+    def __post_init__(self) -> None:
+        if self.max_output_tokens <= 0:
+            raise ValueError("max output tokens must be positive")
+        if self.chunk_max_chars <= self.chunk_overlap or self.chunk_overlap < 0:
+            raise ValueError("chunk identity requires max chars greater than non-negative overlap")
+
+    @property
+    def namespace_key(self) -> str:
+        """Identity of semantic production inputs other than document content."""
+        return self._key(include_content=False)
 
     @property
     def cache_key(self) -> str:
+        return self._key(include_content=True)
+
+    def _key(self, *, include_content: bool) -> str:
         payload = json.dumps(
             {
-                "content_signature": self.content_signature,
+                **(
+                    {"content_signature": self.content_signature}
+                    if include_content
+                    else {}
+                ),
                 "gateway": self.gateway,
                 "requested_model": self.requested_model,
                 "prompt_version": self.prompt_version,
                 "prompt_sha256": self.prompt_sha256,
                 "extraction_schema_version": self.extraction_schema_version,
+                "extraction_schema_sha256": self.extraction_schema_sha256,
+                "schema_name": self.schema_name,
+                "strict_json_schema": self.strict_json_schema,
+                "max_output_tokens": self.max_output_tokens,
+                "chunk_max_chars": self.chunk_max_chars,
+                "chunk_overlap": self.chunk_overlap,
+                "temperature": self.temperature,
+                "require_parameters": self.require_parameters,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -89,6 +130,14 @@ class ExtractionCache:
                     prompt_version TEXT NOT NULL,
                     prompt_sha256 TEXT NOT NULL,
                     extraction_schema_version TEXT NOT NULL,
+                    extraction_schema_sha256 TEXT NOT NULL DEFAULT '',
+                    schema_name TEXT NOT NULL DEFAULT '',
+                    strict_json_schema INTEGER NOT NULL DEFAULT 1,
+                    max_output_tokens INTEGER NOT NULL DEFAULT 800,
+                    chunk_max_chars INTEGER NOT NULL DEFAULT 2500,
+                    chunk_overlap INTEGER NOT NULL DEFAULT 250,
+                    temperature REAL NOT NULL DEFAULT 0,
+                    require_parameters INTEGER NOT NULL DEFAULT 1,
                     result_json TEXT NOT NULL,
                     requested_model TEXT NOT NULL,
                     actual_model TEXT,
@@ -97,11 +146,34 @@ class ExtractionCache:
                     input_tokens INTEGER NOT NULL,
                     output_tokens INTEGER NOT NULL,
                     cost_usd REAL NOT NULL,
+                    usage_is_complete INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     PRIMARY KEY (cache_key, unit_index)
                 );
                 """
             )
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(extraction_results)"
+                ).fetchall()
+            }
+            migrations = (
+                ("extraction_schema_sha256", "TEXT NOT NULL DEFAULT ''"),
+                ("schema_name", "TEXT NOT NULL DEFAULT ''"),
+                ("strict_json_schema", "INTEGER NOT NULL DEFAULT 1"),
+                ("max_output_tokens", "INTEGER NOT NULL DEFAULT 800"),
+                ("chunk_max_chars", "INTEGER NOT NULL DEFAULT 2500"),
+                ("chunk_overlap", "INTEGER NOT NULL DEFAULT 250"),
+                ("temperature", "REAL NOT NULL DEFAULT 0"),
+                ("require_parameters", "INTEGER NOT NULL DEFAULT 1"),
+                ("usage_is_complete", "INTEGER NOT NULL DEFAULT 1"),
+            )
+            for column, declaration in migrations:
+                if column not in columns:
+                    connection.execute(
+                        f"ALTER TABLE extraction_results ADD COLUMN {column} {declaration}"
+                    )
 
     @staticmethod
     def _unit_hash(unit: TextUnit) -> str:
@@ -128,6 +200,7 @@ class ExtractionCache:
                 input_tokens=int(row["input_tokens"]),
                 output_tokens=int(row["output_tokens"]),
                 cost_usd=float(row["cost_usd"]),
+                usage_is_complete=bool(row["usage_is_complete"]),
             ),
             created_at=row["created_at"],
         )
@@ -150,10 +223,13 @@ class ExtractionCache:
                 INSERT OR IGNORE INTO extraction_results (
                     cache_key, unit_index, unit_id, unit_sha256,
                     content_signature, gateway, prompt_version, prompt_sha256,
-                    extraction_schema_version, result_json,
+                    extraction_schema_version, extraction_schema_sha256,
+                    schema_name, strict_json_schema, max_output_tokens,
+                    chunk_max_chars, chunk_overlap, temperature,
+                    require_parameters, result_json,
                     requested_model, actual_model, provider, generation_id,
-                    input_tokens, output_tokens, cost_usd, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    input_tokens, output_tokens, cost_usd, usage_is_complete, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     identity.cache_key,
@@ -165,6 +241,14 @@ class ExtractionCache:
                     identity.prompt_version,
                     identity.prompt_sha256,
                     identity.extraction_schema_version,
+                    identity.extraction_schema_sha256,
+                    identity.schema_name,
+                    int(identity.strict_json_schema),
+                    identity.max_output_tokens,
+                    identity.chunk_max_chars,
+                    identity.chunk_overlap,
+                    identity.temperature,
+                    int(identity.require_parameters),
                     extraction.result.model_dump_json(),
                     metadata.requested_model,
                     metadata.actual_model,
@@ -173,6 +257,7 @@ class ExtractionCache:
                     metadata.input_tokens,
                     metadata.output_tokens,
                     metadata.cost_usd,
+                    int(metadata.usage_is_complete),
                     to_iso(created_at),
                 ),
             )
@@ -258,9 +343,17 @@ class UsageSummary:
 class QuotaLedger:
     """Cross-repository atomic request reservations and actual usage."""
 
-    def __init__(self, path: Path, policy: QuotaPolicy | None = None):
+    def __init__(
+        self,
+        path: Path,
+        policy: QuotaPolicy | None = None,
+        reservation_lease_seconds: int = 300,
+    ):
+        if reservation_lease_seconds <= 0:
+            raise ValueError("reservation lease seconds must be positive")
         self.path = Path(path)
         self.policy = policy or QuotaPolicy()
+        self.reservation_lease_seconds = reservation_lease_seconds
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -296,21 +389,45 @@ class QuotaLedger:
                     generation_id TEXT,
                     created_at TEXT NOT NULL,
                     completed_at TEXT,
-                    last_error TEXT
+                    last_error TEXT,
+                    dispatched_at TEXT,
+                    released_at TEXT,
+                    usage_is_complete INTEGER
                 );
                 CREATE INDEX IF NOT EXISTS llm_requests_day ON llm_requests(utc_day);
                 CREATE INDEX IF NOT EXISTS llm_requests_month ON llm_requests(utc_month);
                 """
             )
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(llm_requests)").fetchall()
+            }
+            for column, declaration in (
+                ("dispatched_at", "TEXT"),
+                ("released_at", "TEXT"),
+                ("usage_is_complete", "INTEGER"),
+            ):
+                if column not in columns:
+                    connection.execute(
+                        f"ALTER TABLE llm_requests ADD COLUMN {column} {declaration}"
+                    )
 
     @staticmethod
     def _effective(column: str, reserved: str) -> str:
-        return f"CASE WHEN status = 'completed' THEN COALESCE({column}, 0) ELSE {reserved} END"
+        return (
+            "CASE WHEN released_at IS NOT NULL THEN 0 "
+            f"WHEN status = 'completed' THEN COALESCE({column}, {reserved}) "
+            f"ELSE {reserved} END"
+        )
+
+    @staticmethod
+    def _effective_calls() -> str:
+        return "CASE WHEN released_at IS NULL THEN 1 ELSE 0 END"
 
     def _usage(self, connection: sqlite3.Connection, where: str, value: str):  # noqa: ANN201
         return connection.execute(
             f"""
-            SELECT COUNT(*) AS calls,
+            SELECT COALESCE(SUM({self._effective_calls()}), 0) AS calls,
                    COALESCE(SUM({self._effective('actual_input_tokens', 'reserved_input_tokens')}), 0) AS input_tokens,
                    COALESCE(SUM({self._effective('actual_output_tokens', 'reserved_output_tokens')}), 0) AS output_tokens,
                    COALESCE(SUM({self._effective('actual_cost_usd', 'reserved_cost_usd')}), 0) AS cost_usd
@@ -318,6 +435,33 @@ class QuotaLedger:
             """,
             (value,),
         ).fetchone()
+
+    def _reconcile_orphans(self, connection: sqlite3.Connection, now: str) -> None:
+        """Release provably undispatched work; retain dispatched work conservatively."""
+        moment = to_iso(now)
+        stale_before = to_iso(
+            parse_iso(moment) - timedelta(seconds=self.reservation_lease_seconds)
+        )
+        connection.execute(
+            """
+            UPDATE llm_requests
+            SET released_at = ?, completed_at = ?,
+                last_error = 'reservation lease expired before provider dispatch'
+            WHERE status = 'reserved' AND dispatched_at IS NULL
+              AND released_at IS NULL AND created_at <= ?
+            """,
+            (moment, moment, stale_before),
+        )
+        connection.execute(
+            """
+            UPDATE llm_requests
+            SET status = 'unknown', completed_at = ?,
+                last_error = 'provider outcome unknown after reservation lease expired'
+            WHERE status = 'reserved' AND dispatched_at IS NOT NULL
+              AND released_at IS NULL AND dispatched_at <= ?
+            """,
+            (moment, stale_before),
+        )
 
     def reserve(
         self,
@@ -338,6 +482,7 @@ class QuotaLedger:
         cost = self.policy.reserved_cost(estimated_input_tokens, max_output_tokens)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._reconcile_orphans(connection, now)
             daily = self._usage(connection, "utc_day", day)
             monthly = self._usage(connection, "utc_month", month)
             checks = [
@@ -361,7 +506,7 @@ class QuotaLedger:
             if bootstrap:
                 bootstrap_usage = connection.execute(
                     f"""
-                    SELECT COUNT(*) AS calls,
+                    SELECT COALESCE(SUM({self._effective_calls()}), 0) AS calls,
                            COALESCE(SUM({self._effective('actual_input_tokens', 'reserved_input_tokens')}), 0) AS input_tokens,
                            COALESCE(SUM({self._effective('actual_output_tokens', 'reserved_output_tokens')}), 0) AS output_tokens
                     FROM llm_requests WHERE bootstrap = 1
@@ -415,24 +560,51 @@ class QuotaLedger:
             )
         return QuotaReservation(reservation_id, estimated_input_tokens, max_output_tokens, cost)
 
+    def mark_dispatched(self, reservation: QuotaReservation, now: str) -> None:
+        """Durably cross the money boundary before any provider call can start."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE llm_requests SET dispatched_at = ?
+                WHERE reservation_id = ? AND status = 'reserved'
+                  AND dispatched_at IS NULL AND released_at IS NULL
+                """,
+                (to_iso(now), reservation.reservation_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("quota reservation cannot be dispatched")
+
     def settle(self, reservation: QuotaReservation, metadata: CompletionMetadata, now: str) -> None:
+        if metadata.usage_is_complete:
+            input_tokens = metadata.input_tokens
+            output_tokens = metadata.output_tokens
+            cost_usd = metadata.cost_usd
+        else:
+            # OpenRouter documents usage on every non-streaming response. If
+            # that contract is ever incomplete, never turn missing money or
+            # token fields into zero: retain the conservative preflight values.
+            input_tokens = max(metadata.input_tokens, reservation.reserved_input_tokens)
+            output_tokens = max(metadata.output_tokens, reservation.reserved_output_tokens)
+            cost_usd = max(metadata.cost_usd, reservation.reserved_cost_usd)
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE llm_requests
                 SET status = 'completed', actual_input_tokens = ?, actual_output_tokens = ?,
                     actual_cost_usd = ?, actual_model = ?, provider = ?, generation_id = ?,
-                    completed_at = ?, last_error = NULL
+                    completed_at = ?, last_error = NULL, usage_is_complete = ?
                 WHERE reservation_id = ? AND status = 'reserved'
+                  AND dispatched_at IS NOT NULL AND released_at IS NULL
                 """,
                 (
-                    metadata.input_tokens,
-                    metadata.output_tokens,
-                    metadata.cost_usd,
+                    input_tokens,
+                    output_tokens,
+                    cost_usd,
                     metadata.actual_model,
                     metadata.provider,
                     metadata.generation_id,
                     to_iso(now),
+                    int(metadata.usage_is_complete),
                     reservation.reservation_id,
                 ),
             )
@@ -446,6 +618,7 @@ class QuotaLedger:
                 UPDATE llm_requests
                 SET status = 'unknown', completed_at = ?, last_error = ?
                 WHERE reservation_id = ? AND status = 'reserved'
+                  AND released_at IS NULL
                 """,
                 (to_iso(now), f"{type(error).__name__}: {error}"[:4000], reservation.reservation_id),
             )
@@ -453,9 +626,14 @@ class QuotaLedger:
     def counts(self) -> dict[str, int]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT status, COUNT(*) AS count FROM llm_requests GROUP BY status"
+                """
+                SELECT CASE WHEN released_at IS NOT NULL THEN 'released' ELSE status END
+                           AS effective_status,
+                       COUNT(*) AS count
+                FROM llm_requests GROUP BY effective_status
+                """
             ).fetchall()
-        return {row["status"]: int(row["count"]) for row in rows}
+        return {row["effective_status"]: int(row["count"]) for row in rows}
 
     def usage_summary(self, now: str) -> UsageSummary:
         moment = parse_iso(to_iso(now))
@@ -520,6 +698,20 @@ class SemanticBatchRunner:
         self.gateway = gateway
         self.batch_policy = batch_policy or BatchPolicy()
 
+    def identity_for(self, content_signature: str) -> ExtractionIdentity:
+        return ExtractionIdentity(
+            content_signature=content_signature,
+            gateway=self.gateway,
+            requested_model=self.extractor.requested_model,
+            max_output_tokens=self.batch_policy.max_output_tokens_per_call,
+            chunk_max_chars=LIVE_CHUNK_MAX_CHARS,
+            chunk_overlap=LIVE_CHUNK_OVERLAP,
+        )
+
+    @property
+    def semantic_namespace(self) -> str:
+        return self.identity_for("").namespace_key
+
     @staticmethod
     def estimate_input_tokens(unit: TextUnit) -> int:
         # Admission control must run before provider accounting exists. UTF-8
@@ -536,11 +728,7 @@ class SemanticBatchRunner:
         now: str,
         on_advance=None,  # noqa: ANN001
     ) -> BatchOutcome:
-        identity = ExtractionIdentity(
-            content_signature=content_signature,
-            gateway=self.gateway,
-            requested_model=self.extractor.requested_model,
-        )
+        identity = self.identity_for(content_signature)
         next_unit_index = min(max(0, next_unit_index), len(units))
         # The cursor is a scheduling hint. The cache is durable truth after a
         # crash between provider completion and cursor advancement.
@@ -587,6 +775,7 @@ class SemanticBatchRunner:
                 bootstrap=bootstrap,
                 now=now,
             )
+            self.quota.mark_dispatched(reservation, now)
             try:
                 extraction = self.extractor.extract_unit(
                     unit,

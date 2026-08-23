@@ -44,7 +44,10 @@ The inbox, state, event log and extraction results are never shared between repo
 receiver/worker pair still owns one repository lane; start another pair for another repository.
 `llm_operations.sqlite` is deliberately shared: it contains only provider request reservations and
 actual usage metadata, and serializes the all-repository daily/monthly hard caps. Every ledger row
-is repo-qualified; it contains no extracted result or source text.
+is repo-qualified; it contains no extracted result or source text. Reservations are marked
+dispatched before the provider boundary. Expired undispatched rows are released; expired dispatched
+rows become conservative `unknown` outcomes. Incomplete provider usage keeps the reservation's
+token and cost estimates, so missing metadata cannot make a hard cap fail open.
 
 ## Bounded bootstrap
 
@@ -90,6 +93,9 @@ Fetching a seed marks semantic work `pending`. Deterministic replay can commit i
 LLM-enabled worker later materializes one durable semantic job per changed document. Only a fully
 cached and validated document marks its extraction signature current. Provider/quota failure marks
 only that repository `degraded`, preserves last-good semantic facts and leaves the job resumable.
+Operational freshness also records the extraction namespace. Model, prompt, schema, strict request,
+per-call output or live chunk-policy changes therefore queue unchanged documents into the new
+namespace instead of leaving old facts marked current.
 The Streamlit live tab shows these fields next to the repository selector.
 
 Use the repository-qualified CLI paths when more than one repository is registered:

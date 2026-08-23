@@ -22,6 +22,7 @@ class CompletionMetadata:
     input_tokens: int
     output_tokens: int
     cost_usd: float
+    usage_is_complete: bool = True
 
     def __post_init__(self) -> None:
         if not self.requested_model:
@@ -136,7 +137,9 @@ class OpenAICompatibleClient:
                 )
                 response.raise_for_status()
                 data = response.json()
-                usage = data.get("usage") or {}
+                raw_usage = data.get("usage")
+                usage = raw_usage if isinstance(raw_usage, dict) else {}
+                required_usage = {"prompt_tokens", "completion_tokens", "cost"}
                 return StructuredCompletion(
                     content=data["choices"][0]["message"]["content"],
                     metadata=CompletionMetadata(
@@ -147,6 +150,10 @@ class OpenAICompatibleClient:
                         input_tokens=int(usage.get("prompt_tokens") or 0),
                         output_tokens=int(usage.get("completion_tokens") or 0),
                         cost_usd=float(usage.get("cost") or 0.0),
+                        usage_is_complete=(
+                            required_usage.issubset(usage)
+                            and all(usage[key] is not None for key in required_usage)
+                        ),
                     ),
                 )
 

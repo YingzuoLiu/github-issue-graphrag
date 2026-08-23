@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import sqlite3
+
 import pytest
 
 from issue_graphrag.live.extraction import LLMExtractor
@@ -123,24 +126,24 @@ def test_cache_lookup_namespace_uses_requested_identity_not_response_metadata(tm
 def test_every_semantic_identity_dimension_creates_a_distinct_cache_namespace():
     base = ExtractionIdentity("content", "openrouter", "requested-model")
     alternatives = [
-        ExtractionIdentity("other-content", "openrouter", "requested-model"),
-        ExtractionIdentity("content", "other-gateway", "requested-model"),
-        ExtractionIdentity("content", "openrouter", "other-model"),
-        ExtractionIdentity(
-            "content", "openrouter", "requested-model", prompt_version="other-version"
-        ),
-        ExtractionIdentity(
-            "content", "openrouter", "requested-model", prompt_sha256="other-hash"
-        ),
-        ExtractionIdentity(
-            "content",
-            "openrouter",
-            "requested-model",
-            extraction_schema_version="other-schema",
-        ),
+        replace(base, content_signature="other-content"),
+        replace(base, gateway="other-gateway"),
+        replace(base, requested_model="other-model"),
+        replace(base, prompt_version="other-version"),
+        replace(base, prompt_sha256="other-hash"),
+        replace(base, extraction_schema_version="other-schema"),
+        replace(base, extraction_schema_sha256="other-schema-hash"),
+        replace(base, schema_name="other-schema-name"),
+        replace(base, strict_json_schema=False),
+        replace(base, max_output_tokens=801),
+        replace(base, chunk_max_chars=2501),
+        replace(base, chunk_overlap=251),
+        replace(base, temperature=0.1),
+        replace(base, require_parameters=False),
     ]
 
-    assert len({base.cache_key, *(identity.cache_key for identity in alternatives)}) == 7
+    assert len({base.cache_key, *(identity.cache_key for identity in alternatives)}) == 15
+    assert base.namespace_key == replace(base, content_signature="other-content").namespace_key
 
 
 def test_long_document_resumes_across_batches_and_only_publishes_complete_result(tmp_path):
@@ -220,6 +223,7 @@ def test_global_daily_call_cap_is_atomic_across_repositories(tmp_path):
         bootstrap=False,
         now=NOW,
     )
+    ledger.mark_dispatched(reservation, NOW)
     ledger.settle(
         reservation,
         CompletionMetadata("model", "actual", "provider", "gen", 5, 5, 0.001),
@@ -242,6 +246,130 @@ def test_global_daily_call_cap_is_atomic_across_repositories(tmp_path):
             bootstrap=False,
             now=NOW,
         )
+
+
+def test_incomplete_provider_usage_keeps_conservative_reservation_and_month_cap(tmp_path):
+    policy = QuotaPolicy(
+        daily_calls=10,
+        daily_input_tokens=1_000,
+        daily_output_tokens=1_000,
+        monthly_cost_usd=0.00005,
+    )
+    ledger = QuotaLedger(tmp_path / "llm_operations.sqlite", policy)
+    identity = ExtractionIdentity("sig", "openrouter", "model")
+    unit = units(1)[0]
+    reservation = ledger.reserve(
+        repo="owner/repo",
+        identity=identity,
+        unit=unit,
+        estimated_input_tokens=10,
+        max_output_tokens=10,
+        bootstrap=False,
+        now=NOW,
+    )
+    ledger.mark_dispatched(reservation, NOW)
+    ledger.settle(
+        reservation,
+        CompletionMetadata(
+            "model",
+            "actual",
+            "provider",
+            "gen",
+            5,
+            5,
+            0,
+            usage_is_complete=False,
+        ),
+        NOW,
+    )
+
+    summary = ledger.usage_summary(NOW)
+    assert summary.daily_input_tokens == reservation.reserved_input_tokens
+    assert summary.daily_output_tokens == reservation.reserved_output_tokens
+    assert summary.monthly_cost_usd == pytest.approx(reservation.reserved_cost_usd)
+    with pytest.raises(QuotaExceeded, match="monthly cost"):
+        ledger.reserve(
+            repo="owner/repo",
+            identity=identity,
+            unit=unit,
+            estimated_input_tokens=10,
+            max_output_tokens=10,
+            bootstrap=False,
+            now=NOW,
+        )
+
+
+def test_orphan_reconciliation_releases_only_work_never_dispatched(tmp_path):
+    path = tmp_path / "llm_operations.sqlite"
+    policy = QuotaPolicy(daily_calls=2, monthly_cost_usd=100)
+    ledger = QuotaLedger(path, policy, reservation_lease_seconds=300)
+    identity = ExtractionIdentity("sig", "openrouter", "model")
+    unit = units(1)[0]
+    ledger.reserve(
+        repo="owner/repo",
+        identity=identity,
+        unit=unit,
+        estimated_input_tokens=10,
+        max_output_tokens=10,
+        bootstrap=False,
+        now=NOW,
+    )
+
+    later = "2026-08-24T00:05:01Z"
+    replacement = QuotaLedger(path, policy, reservation_lease_seconds=300).reserve(
+        repo="owner/repo",
+        identity=identity,
+        unit=unit,
+        estimated_input_tokens=10,
+        max_output_tokens=10,
+        bootstrap=False,
+        now=later,
+    )
+    assert ledger.counts() == {"released": 1, "reserved": 1}
+    assert ledger.usage_summary(later).daily_calls == 1
+
+    QuotaLedger(path, policy, reservation_lease_seconds=300).mark_dispatched(
+        replacement, later
+    )
+    final = "2026-08-24T00:10:02Z"
+    QuotaLedger(path, policy, reservation_lease_seconds=300).reserve(
+        repo="owner/repo",
+        identity=identity,
+        unit=unit,
+        estimated_input_tokens=10,
+        max_output_tokens=10,
+        bootstrap=False,
+        now=final,
+    )
+    assert ledger.counts() == {"released": 1, "reserved": 1, "unknown": 1}
+    assert ledger.usage_summary(final).daily_calls == 2
+
+
+def test_provider_dispatch_starts_only_after_durable_dispatch_marker(tmp_path):
+    path = tmp_path / "llm_operations.sqlite"
+
+    class BoundaryCheckingClient(FakeStructuredClient):
+        def complete_structured(self, prompt, **kwargs):  # noqa: ANN001
+            with sqlite3.connect(path) as connection:
+                dispatched_at = connection.execute(
+                    "SELECT dispatched_at FROM llm_requests"
+                ).fetchone()[0]
+            assert dispatched_at == NOW
+            return super().complete_structured(prompt, **kwargs)
+
+    outcome = runner(
+        tmp_path,
+        BoundaryCheckingClient(),
+        quota=QuotaLedger(path),
+    ).run_batch(
+        content_signature="dispatch-boundary",
+        units=units(1),
+        next_unit_index=0,
+        bootstrap=False,
+        now=NOW,
+    )
+
+    assert outcome.complete
 
 
 @pytest.mark.parametrize(

@@ -688,10 +688,12 @@ configured model.
 Live `--llm` is intentionally stricter than the older offline batch scripts. It requires
 `LLM_PROVIDER=openrouter`, sends the exact requested model with strict JSON Schema output and
 `require_parameters=true`, and makes one provider call per changed TextUnit. The extraction prompt
-is versioned as `extraction/2026-08-24` and its exact SHA-256 is asserted at runtime. A prompt,
-model, gateway, schema-version, or content-signature change creates a new cache namespace; actual
-response model/provider/generation id/usage/cost remain audit metadata and never rewrite lookup
-identity.
+is versioned as `extraction/2026-08-24` and its exact SHA-256 is asserted at runtime. Content,
+prompt version/hash, exact response-schema hash, requested model, gateway, strict-output policy,
+per-call output ceiling and live chunk parameters all participate in lookup identity. Changing any
+of them both creates a new namespace and durably queues unchanged documents for re-extraction;
+last-good facts remain visible until the replacement document is complete. Actual response
+model/provider/generation id/usage/cost remain audit metadata and never rewrite lookup identity.
 
 The operational limits are configurable in `.env`, with these defaults:
 
@@ -708,11 +710,16 @@ in `inbox.db` resumes a long document over later batches, rotating it behind les
 facts and the extraction signature are published only after every unit for the same content
 signature is cached and validated. `data/repos/llm_operations.sqlite` is the shared reservation and
 actual-usage ledger that makes the global caps atomic across repository workers. Unknown outcomes
-retain their conservative reservation. Cache hits consume no provider-call quota.
+retain their conservative reservation. A leased reservation is durably marked dispatched before
+the HTTP call; an expired reservation that never crossed that boundary is released, while an
+expired dispatched attempt becomes `unknown`. If OpenRouter ever omits any documented usage field,
+the ledger retains the conservative token and cost reservation instead of settling missing values
+to zero. Cache hits consume no provider-call quota.
 
 The model and quota values can be changed later. Quota-only changes do not invalidate cache;
 changing the requested model does. Prompt text changes require a deliberate new prompt version and
-SHA-256, so an experiment cannot silently inherit results from the previous behaviour. To stop
+SHA-256, so an experiment cannot silently inherit results from the previous behaviour. Chunk or
+per-call output-ceiling changes likewise create and activate a new namespace. To stop
 after a one-time paid acceptance run, set a global cap to `0` or run without `--llm`; deterministic
 GitHub facts continue, last-good semantics remain, and pending work stays recoverable.
 

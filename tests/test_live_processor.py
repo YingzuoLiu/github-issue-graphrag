@@ -619,3 +619,96 @@ def test_partial_operational_batches_publish_nothing_until_document_is_complete(
     ].extraction_signature()
     assert [fact for fact in completed.facts if fact.origin == "llm"]
     assert client.calls > 1
+
+
+@pytest.mark.parametrize("change", ["model", "max_output_tokens"])
+def test_operational_namespace_change_reextracts_unchanged_document(tmp_path, change):
+    class StructuredClient:
+        def __init__(self, model):  # noqa: ANN001
+            self.model = model
+            self.calls = 0
+
+        def complete_structured(self, prompt, **kwargs):  # noqa: ANN001
+            self.calls += 1
+            return StructuredCompletion(
+                content=(
+                    '{"entities":[{"name":"Namespace result","type":"FEATURE",'
+                    '"description":"grounded"}],"relationships":[]}'
+                ),
+                metadata=CompletionMetadata(
+                    self.model,
+                    self.model,
+                    "Google",
+                    f"gen-{self.calls}",
+                    20,
+                    5,
+                    0.00001,
+                ),
+            )
+
+    def operational_processor(client, max_output_tokens):  # noqa: ANN001
+        extractor = LLMExtractor(client)
+        semantic_runner = SemanticBatchRunner(
+            repo=REPO,
+            extractor=extractor,
+            cache=ExtractionCache(tmp_path / "extraction_cache.sqlite"),
+            quota=QuotaLedger(tmp_path / "llm_operations.sqlite"),
+            batch_policy=BatchPolicy(
+                max_calls=12,
+                max_input_tokens=100_000,
+                max_output_tokens=100_000,
+                max_output_tokens_per_call=max_output_tokens,
+            ),
+        )
+        return (
+            DeliveryProcessor(
+                repo=REPO,
+                inbox=DeliveryInbox(tmp_path / "inbox.sqlite"),
+                state_path=tmp_path / "live_state.json",
+                event_log=EventLog(tmp_path / "events.jsonl"),
+                extractor=extractor,
+                freshness_path=tmp_path / "freshness.json",
+                retry_delay_seconds=0,
+                semantic_runner=semantic_runner,
+            ),
+            semantic_runner,
+        )
+
+    item = RepoItem(
+        kind="issue",
+        repo=REPO,
+        number=7,
+        title="Issue 7",
+        body="unchanged semantic input",
+        effective_at=NOW,
+        source_delivery_id="seed",
+    )
+    write_state(
+        tmp_path / "live_state.json",
+        LiveState(repo=REPO, items={item.document_id: item}, last_event_at=NOW),
+    )
+    first_client = StructuredClient("model-a")
+    first_processor, first_runner = operational_processor(first_client, 800)
+    first = first_processor.process_one(now=NOW)
+    assert first is not None and first.status == "succeeded"
+    first_state = read_state(tmp_path / "live_state.json")
+    assert first_state.extraction_namespaces[item.document_id] == (
+        first_runner.semantic_namespace
+    )
+
+    second_client = StructuredClient("model-b" if change == "model" else "model-a")
+    second_processor, second_runner = operational_processor(
+        second_client,
+        801 if change == "max_output_tokens" else 800,
+    )
+    assert second_runner.semantic_namespace != first_runner.semantic_namespace
+
+    second = second_processor.process_one(now="2024-06-01T10:00:01Z")
+
+    assert second is not None and second.status == "succeeded"
+    assert second_client.calls == 1
+    final_state = read_state(tmp_path / "live_state.json")
+    assert final_state.extraction_signatures[item.document_id] == item.extraction_signature()
+    assert final_state.extraction_namespaces[item.document_id] == (
+        second_runner.semantic_namespace
+    )

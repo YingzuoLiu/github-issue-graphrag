@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 from pydantic import ValidationError
@@ -45,6 +46,11 @@ EXTRACTION_RESPONSE_SCHEMA = {
     },
     "required": ["entities", "relationships"],
 }
+EXTRACTION_RESPONSE_SCHEMA_SHA256 = hashlib.sha256(
+    json.dumps(EXTRACTION_RESPONSE_SCHEMA, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+).hexdigest()
 
 
 def _normalize_name(name: str) -> str:

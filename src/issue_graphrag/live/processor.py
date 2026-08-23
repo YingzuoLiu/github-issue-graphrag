@@ -168,6 +168,11 @@ class DeliveryProcessor:
         self.freshness_path = Path(freshness_path) if freshness_path is not None else None
         self.semantic_runner = semantic_runner
 
+    def _semantic_namespace(self) -> str | None:
+        if self.semantic_runner is None:
+            return None
+        return self.semantic_runner.semantic_namespace
+
     def _record_freshness(
         self,
         *,
@@ -259,7 +264,8 @@ class DeliveryProcessor:
     def _queue_pending_semantics(self, state: LiveState, now: str) -> None:
         if isinstance(self.extractor, NullExtractor):
             return
-        for document_id in pending_extraction_documents(state):
+        namespace = self._semantic_namespace()
+        for document_id in pending_extraction_documents(state, namespace):
             item = state.items[document_id]
             existing = self.inbox.get_semantic_job(document_id)
             if existing is not None and existing.status == "processing":
@@ -270,6 +276,7 @@ class DeliveryProcessor:
                 trigger_delivery_id=item.source_delivery_id or "seed",
                 total_units=len(text_units_for(item)),
                 now=now,
+                semantic_namespace=namespace or "",
             )
 
     @staticmethod
@@ -314,7 +321,16 @@ class DeliveryProcessor:
                     )
 
                 current_signature = item.extraction_signature()
-                if state.extraction_signatures.get(job.document_id) == current_signature:
+                expected_namespace = self._semantic_namespace() or ""
+                namespace_is_current = (
+                    not expected_namespace
+                    or state.extraction_namespaces.get(job.document_id)
+                    == expected_namespace
+                )
+                if (
+                    state.extraction_signatures.get(job.document_id) == current_signature
+                    and namespace_is_current
+                ):
                     heartbeat.check()
                     self.inbox.complete_semantic_job(job.document_id, lease_id)
                     return ProcessingResult(
@@ -324,7 +340,10 @@ class DeliveryProcessor:
                         document_id=job.document_id,
                     )
 
-                if current_signature != job.content_signature:
+                if (
+                    current_signature != job.content_signature
+                    or job.semantic_namespace != expected_namespace
+                ):
                     heartbeat.check()
                     self.inbox.complete_semantic_job(job.document_id, lease_id)
                     self.inbox.upsert_semantic_job(
@@ -334,6 +353,7 @@ class DeliveryProcessor:
                         or job.trigger_delivery_id,
                         total_units=len(text_units_for(item)),
                         now=started_at,
+                        semantic_namespace=expected_namespace,
                     )
                     return ProcessingResult(
                         job.trigger_delivery_id,
@@ -410,6 +430,7 @@ class DeliveryProcessor:
                         outcome.result,
                         moment,
                         job.trigger_delivery_id,
+                        job.semantic_namespace,
                     )
                 working.last_event_at = moment
                 heartbeat.check()
@@ -423,7 +444,9 @@ class DeliveryProcessor:
                     state_commit_at=working.last_event_at,
                     semantic_updated_at=working.last_event_at or started_at,
                     error=None,
-                    semantic_pending=has_pending_extraction(working),
+                    semantic_pending=has_pending_extraction(
+                        working, self._semantic_namespace()
+                    ),
                 )
             except Exception as freshness_exc:
                 error = (
@@ -537,7 +560,9 @@ class DeliveryProcessor:
                 state_commit_at=event.indexed_at or completed_at,
                 semantic_updated_at=completed_at,
                 error=None,
-                semantic_pending=has_pending_extraction(state),
+                semantic_pending=has_pending_extraction(
+                    state, self._semantic_namespace()
+                ),
             )
         except Exception as freshness_exc:
             error = (

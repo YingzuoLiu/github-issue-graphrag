@@ -17,6 +17,9 @@ from issue_graphrag.live.models import Evidence, Fact, RepoItem
 from issue_graphrag.llm.client import CompletionMetadata
 from issue_graphrag.models import Entity, ExtractionResult, Relationship, TextUnit
 
+EXTRACTION_SCHEMA_NAME = "github_issue_graph_extraction"
+EXTRACTION_REQUIRE_PARAMETERS = True
+
 
 @dataclass(frozen=True)
 class UnitExtraction:
@@ -65,10 +68,10 @@ class LLMExtractor:
         self.calls += 1
         response = complete_structured(
             extraction_prompt(text_unit),
-            schema_name="github_issue_graph_extraction",
+            schema_name=EXTRACTION_SCHEMA_NAME,
             schema=EXTRACTION_RESPONSE_SCHEMA,
             max_tokens=max_output_tokens,
-            require_parameters=True,
+            require_parameters=EXTRACTION_REQUIRE_PARAMETERS,
         )
         try:
             result = parse_extraction_result(response.content, text_unit)

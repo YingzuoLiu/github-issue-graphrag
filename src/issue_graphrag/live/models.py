@@ -405,6 +405,7 @@ class LiveState(BaseModel):
     facts: list[Fact] = Field(default_factory=list)
     processed_deliveries: list[str] = Field(default_factory=list)
     extraction_signatures: dict[str, str] = Field(default_factory=dict)
+    extraction_namespaces: dict[str, str] = Field(default_factory=dict)
     last_event_at: str | None = None
 
     def valid_facts(self, moment: str | None = None) -> list[Fact]:

@@ -100,29 +100,45 @@ def refresh_deterministic(state: LiveState, moment: str, delivery_id: str) -> li
     return changes
 
 
-def _extraction_is_stale(state: LiveState, document_id: str, item: RepoItem) -> bool:
+def _extraction_is_stale(
+    state: LiveState,
+    document_id: str,
+    item: RepoItem,
+    semantic_namespace: str | None = None,
+) -> bool:
     """The one definition of "this document still owes extraction".
 
     Freshness reporting and the extraction pass have to agree on this. A
     second copy of the comparison is how a worker starts calling stale state
     ``current`` again.
     """
-    return state.extraction_signatures.get(document_id) != item.extraction_signature()
+    if state.extraction_signatures.get(document_id) != item.extraction_signature():
+        return True
+    return (
+        semantic_namespace is not None
+        and state.extraction_namespaces.get(document_id) != semantic_namespace
+    )
 
 
-def pending_extraction_documents(state: LiveState) -> list[str]:
+def pending_extraction_documents(
+    state: LiveState,
+    semantic_namespace: str | None = None,
+) -> list[str]:
     """Documents whose extraction input changed since they were last extracted."""
     return sorted(
         document_id
         for document_id, item in state.items.items()
-        if _extraction_is_stale(state, document_id, item)
+        if _extraction_is_stale(state, document_id, item, semantic_namespace)
     )
 
 
-def has_pending_extraction(state: LiveState) -> bool:
+def has_pending_extraction(
+    state: LiveState,
+    semantic_namespace: str | None = None,
+) -> bool:
     """Whether any document still owes semantic extraction."""
     return any(
-        _extraction_is_stale(state, document_id, item)
+        _extraction_is_stale(state, document_id, item, semantic_namespace)
         for document_id, item in state.items.items()
     )
 
@@ -154,6 +170,7 @@ def refresh_inferred(
                 reconcile_facts(state, document_id, "llm", [], moment, delivery_id)
             )
             state.extraction_signatures.pop(document_id, None)
+            state.extraction_namespaces.pop(document_id, None)
         return changes, [], []
 
     changes: list[FactChange] = []
@@ -173,6 +190,8 @@ def refresh_inferred(
         rejected.extend(RejectedFact(fact=fact, reason=reason) for fact, reason in refused)
         changes.extend(reconcile_facts(state, document_id, "llm", kept, moment, delivery_id))
         state.extraction_signatures[document_id] = item.extraction_signature()
+        # Generic/fixture extractors have no auditable operational namespace.
+        state.extraction_namespaces.pop(document_id, None)
 
     return changes, rejected, stale
 
@@ -183,6 +202,7 @@ def publish_inferred_result(
     result: ExtractionResult,
     moment: str,
     delivery_id: str,
+    semantic_namespace: str,
 ) -> tuple[list[FactChange], list[RejectedFact]]:
     """Atomically reconcile one fully cached document extraction into ``state``."""
     item = state.items[document_id]
@@ -196,6 +216,7 @@ def publish_inferred_result(
     kept, refused = validate_inferred(candidates)
     changes = reconcile_facts(state, document_id, "llm", kept, moment, delivery_id)
     state.extraction_signatures[document_id] = item.extraction_signature()
+    state.extraction_namespaces[document_id] = semantic_namespace
     return changes, [RejectedFact(fact=fact, reason=reason) for fact, reason in refused]
 
 
@@ -361,5 +382,12 @@ def rebuild(
         items={key: value.model_copy(deep=True) for key, value in state.items.items()},
     )
     _refresh(fresh, extractor or RecordedExtractor(state), to_iso(resolved), REBUILD_DELIVERY)
+    if extractor is None:
+        fresh.extraction_namespaces = {
+            document_id: namespace
+            for document_id, namespace in state.extraction_namespaces.items()
+            if fresh.extraction_signatures.get(document_id)
+            == state.extraction_signatures.get(document_id)
+        }
     fresh.last_event_at = to_iso(resolved)
     return fresh
