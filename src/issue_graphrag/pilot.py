@@ -17,6 +17,7 @@ from typing import Any, Mapping
 
 import requests
 
+from issue_graphrag.http_boundary import CountingSession
 from issue_graphrag.ingest.github_loader import (
     github_blocking_dependency_count,
     parse_repo,
@@ -203,53 +204,6 @@ def snapshot_from_payload(payload: Mapping[str, Any]) -> PilotSnapshot:
     return snapshot
 
 
-class CountingSession:
-    """Count read and non-GET requests at the HTTP boundary.
-
-    The write count is intentionally attached to the session instead of being
-    a report literal. A later POST/PUT/PATCH/DELETE therefore makes the
-    read-only check fail even if a caller forgets to update the evaluator.
-    """
-
-    def __init__(self, session: Any):
-        self._session = session
-        self.read_count = 0
-        self.write_count = 0
-
-    def _count(self, method: str) -> None:
-        if method.upper() == "GET":
-            self.read_count += 1
-        else:
-            self.write_count += 1
-
-    def request(self, method: str, url: str, **kwargs: Any) -> Any:
-        self._count(method)
-        return self._session.request(method, url, **kwargs)
-
-    def get(self, url: str, **kwargs: Any) -> Any:
-        self._count("GET")
-        return self._session.get(url, **kwargs)
-
-    def post(self, url: str, **kwargs: Any) -> Any:
-        self._count("POST")
-        return self._session.post(url, **kwargs)
-
-    def put(self, url: str, **kwargs: Any) -> Any:
-        self._count("PUT")
-        return self._session.put(url, **kwargs)
-
-    def patch(self, url: str, **kwargs: Any) -> Any:
-        self._count("PATCH")
-        return self._session.patch(url, **kwargs)
-
-    def delete(self, url: str, **kwargs: Any) -> Any:
-        self._count("DELETE")
-        return self._session.delete(url, **kwargs)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._session, name)
-
-
 class GitHubPilotClient:
     """A read-only GitHub client whose HTTP method counts are auditable."""
 
@@ -262,7 +216,10 @@ class GitHubPilotClient:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self.token = token
-        self.session = CountingSession(session or requests.Session())
+        # The pilot measures rather than refuses: its regression sends a real
+        # write and asserts the counter reports it, which is what proves the
+        # reported zero is measured. The live worker blocks instead.
+        self.session = CountingSession(session or requests.Session(), block_writes=False)
         self.timeout_seconds = timeout_seconds
 
     @property
