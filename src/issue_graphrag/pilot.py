@@ -205,7 +205,12 @@ def snapshot_from_payload(payload: Mapping[str, Any]) -> PilotSnapshot:
 
 
 class GitHubPilotClient:
-    """A read-only GitHub client whose HTTP method counts are auditable."""
+    """A read-only GitHub client whose HTTP method counts are auditable.
+
+    Read-only is enforced, not just reported: an unsafe request is refused at
+    the boundary before dispatch. The zero-write figure in a pilot report is
+    therefore a measurement of a session that also could not have written.
+    """
 
     def __init__(
         self,
@@ -216,10 +221,7 @@ class GitHubPilotClient:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self.token = token
-        # The pilot measures rather than refuses: its regression sends a real
-        # write and asserts the counter reports it, which is what proves the
-        # reported zero is measured. The live worker blocks instead.
-        self.session = CountingSession(session or requests.Session(), block_writes=False)
+        self.session = CountingSession(session or requests.Session())
         self.timeout_seconds = timeout_seconds
 
     @property

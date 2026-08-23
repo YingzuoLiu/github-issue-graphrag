@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from issue_graphrag.http_boundary import CountingSession, ReadOnlyViolation
 from issue_graphrag.pilot import (
     GitHubPilotClient,
     contribution_regression_signature,
@@ -291,10 +292,16 @@ def test_pilot_markdown_states_what_the_dry_run_does_not_prove():
 
 
 def test_pilot_write_check_is_measured_and_can_fail():
-    session = FakeSession([])
-    client = GitHubPilotClient(session=session)
+    """The zero-write check must be a measurement, not a hard-coded constant.
 
-    response = client.session.post(
+    Proving that needs a write to actually be dispatched and counted, which no
+    shipped client will do any more. A standalone permissive session stands in
+    for one, so the evaluator is still shown failing on a real counted write.
+    """
+    session = FakeSession([])
+    counter = CountingSession(session, block_writes=False)
+
+    response = counter.post(
         f"https://api.github.com/repos/{REPO}/issues/1/labels",
         json={"labels": ["help wanted"]},
     )
@@ -303,15 +310,30 @@ def test_pilot_write_check_is_measured_and_can_fail():
         [_issue(1)],
         [],
         fetched_at=NOW,
-        request_count=client.request_count,
-        write_request_count=client.write_request_count,
+        request_count=counter.read_count,
+        write_request_count=counter.write_count,
     )
     result = evaluate_snapshot(snapshot)
 
     assert response.status_code == 202
-    assert client.write_request_count == 1
+    assert session.calls  # it really went out
+    assert counter.write_count == 1
     assert result["collection"]["github_write_requests"] == 1
     assert not result["engineering_checks"]["github_write_requests_are_zero"]
+
+
+def test_pilot_client_refuses_a_write_before_it_reaches_github():
+    session = FakeSession([])
+    client = GitHubPilotClient(session=session)
+
+    with pytest.raises(ReadOnlyViolation):
+        client.session.post(
+            f"https://api.github.com/repos/{REPO}/issues/1/labels",
+            json={"labels": ["help wanted"]},
+        )
+
+    assert session.calls == []
+    assert client.write_request_count == 1
 
 
 def test_pilot_distinguishes_local_and_cross_repo_qualified_closing_references():
