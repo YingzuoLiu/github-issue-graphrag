@@ -168,6 +168,26 @@ def fetch_pull_request_files(
     return sorted({str(entry["filename"]) for entry in rows if entry.get("filename")})
 
 
+def github_blocking_dependency_count(raw: dict[str, Any]) -> int:
+    """Read GitHub's native blocked-by summary without inferring dependencies.
+
+    GitHub currently exposes counts in ``issue_dependencies_summary`` on the
+    issue payload. The field has appeared with both ``blocked_by`` and
+    ``total_blocked_by`` keys, so the live product and Pilot 0 share this one
+    compatibility boundary.
+    """
+    summary = raw.get("issue_dependencies_summary") or {}
+    if not isinstance(summary, dict):
+        return 0
+    counts: list[int] = []
+    for key in ("blocked_by", "total_blocked_by"):
+        try:
+            counts.append(max(int(summary.get(key) or 0), 0))
+        except (TypeError, ValueError):
+            continue
+    return max(counts, default=0)
+
+
 def to_seed_item(
     repo: str,
     raw: dict[str, Any],
@@ -176,7 +196,7 @@ def to_seed_item(
     files: list[str] | None = None,
 ) -> dict[str, Any]:
     """Shape one API record into the live index's seed format."""
-    return {
+    item = {
         "kind": kind,
         "repo": repo,
         "number": raw["number"],
@@ -216,6 +236,15 @@ def to_seed_item(
             for comment in (comments or [])
         },
     }
+    # False/zero are the RepoItem defaults. Omitting them preserves the byte
+    # identity of reviewed snapshots that predate these fields, while active
+    # platform constraints become first-class live records.
+    if raw.get("locked"):
+        item["locked"] = True
+    dependency_count = github_blocking_dependency_count(raw)
+    if dependency_count:
+        item["blocking_dependency_count"] = dependency_count
+    return item
 
 
 def build_live_seed(

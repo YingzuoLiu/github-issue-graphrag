@@ -224,7 +224,7 @@ The Streamlit demo provides a small interface for selecting retrieval mode, runn
 | Area | What is implemented |
 |---|---|
 | Ingestion boundary | HTTP endpoint that verifies the exact raw body and allowlists one repository per process; repository-qualified SQLite inboxes with delivery-id dedup, leases, retries and dead letters; a separate worker, so GitHub is acknowledged after enqueue and never waits for an LLM |
-| Payload handling | Issue, pull request and comment ingestion including changed files, with paginated PR file hydration — including PRs first seen through a comment |
+| Payload handling | Issue, pull request and comment ingestion including lock state, native dependency counts and changed files, with paginated PR file hydration — including PRs first seen through a comment |
 | Time model | Immutable fact versions with `valid_from` / `valid_to`, so history stays queryable and historical projections never borrow later knowledge; source-clock record versioning, so stale, partial and out-of-order payloads all converge |
 | Correctness | An explicit ontology separating who may assert a predicate from whether the assertion is legal; a rebuild consistency check fingerprinting direction and provenance |
 | Cost control | Incremental indexing that re-extracts only the documents whose text changed |
@@ -451,7 +451,7 @@ convention. There are two separate guard rails, and conflating them leaves a hol
 | Deterministic (GitHub payload only) | Inferred (LLM, then schema-checked) |
 |---|---|
 | webhook signature and delivery-id dedup | technical entities in new comments |
-| issue / PR state, labels, assignees, timestamps | whether two discussions are semantically related |
+| issue / PR state, labels, assignees, lock/dependency status, timestamps | whether two discussions are semantically related |
 | explicit `#123` references, `closes`, `blocked by` | `proposes` / `supersedes` / `conflicts_with` |
 | files a PR touches, module a file belongs to | what a change means for the surrounding area |
 | fact upsert, invalidation, replay, event log | narrative summaries in community reports |
@@ -462,8 +462,8 @@ convention. There are two separate guard rails, and conflating them leaves a hol
 The schema is small on purpose:
 
 - **Node types:** `ISSUE`, `PULL_REQUEST`, `FILE`, `MODULE`, `CONTRIBUTOR`, plus open concept types.
-- **GitHub predicates:** `has_state`, `has_label`, `references`, `closes`, `blocked_by`,
-  `touches`, `belongs_to`, `assigned_to`.
+- **GitHub predicates:** `has_state`, `has_label`, `is_locked`, `has_blocking_dependencies`,
+  `references`, `closes`, `blocked_by`, `touches`, `belongs_to`, `assigned_to`.
 - **Inferred predicates:** `implements`, `conflicts_with`, `supersedes`, `proposes`, `improves`,
   `depends_on`, `uses`, `affects`, and friends. Anything outside the vocabulary folds into
   `related_to` rather than growing it.
@@ -632,7 +632,7 @@ every change can be explained:
 | `good first issue` / `help wanted` / `documentation` | +0.75 |
 | linked technical concepts | +0.20 each, capped at 5 |
 | an open or merged pull request closes or references it | −2.00, status `claimed` |
-| blocked by an issue that is still open | −1.50, status `blocked` |
+| open blocker, locked conversation or native blocking dependency | −1.50 once, status `blocked` unless already `claimed` |
 | issue is closed | drops out of the ranking |
 
 ### Run the real webhook path
@@ -1071,7 +1071,8 @@ This project demonstrates:
   limits.
 - Productization development: `0.4.0.dev0`; M1 freezes a real Graphiti contribution contract and
   adds timestamped, zero-write scheduled pilot monitoring, while M2 isolates repository state,
-  completes bounded bootstrap pagination and exposes per-repository freshness.
+  completes bounded bootstrap pagination and exposes per-repository freshness. M3 carries locked
+  and native dependency signals through versioned GitHub facts into deterministic scoring.
 
 ## Future work
 

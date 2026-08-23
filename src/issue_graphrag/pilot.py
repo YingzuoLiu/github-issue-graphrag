@@ -17,7 +17,11 @@ from typing import Any, Mapping
 
 import requests
 
-from issue_graphrag.ingest.github_loader import parse_repo, to_seed_item
+from issue_graphrag.ingest.github_loader import (
+    github_blocking_dependency_count,
+    parse_repo,
+    to_seed_item,
+)
 from issue_graphrag.live.contribution import HELP_LABELS, opportunities
 from issue_graphrag.live.facts import github_closing_numbers, github_reference_numbers
 from issue_graphrag.live.indexer import NullExtractor, bootstrap
@@ -458,10 +462,7 @@ def _assignees(raw: dict[str, Any]) -> list[str]:
 
 
 def _blocked_by_count(raw: dict[str, Any]) -> int:
-    summary = raw.get("issue_dependencies_summary") or {}
-    if not isinstance(summary, dict):
-        return 0
-    return int(summary.get("blocked_by") or summary.get("total_blocked_by") or 0)
+    return github_blocking_dependency_count(raw)
 
 
 def _pr_links(snapshot: PilotSnapshot) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
@@ -591,10 +592,10 @@ def evaluate_snapshot(
 ) -> dict[str, Any]:
     """Check ranking consistency with explicit GitHub platform constraints.
 
-    This is deliberately not called an independent oracle. Assignee facts and
-    closing-keyword links overlap production behavior; lock and native
-    dependency fields are the only platform constraints not modeled by the
-    current product.
+    This is deliberately not called an independent oracle. Assignee,
+    closing-keyword, lock and native-dependency signals all exercise the
+    production fact path. The comparison remains an integration-consistency
+    check rather than an independent oracle for parser accuracy.
     """
     if top_k < 1:
         raise ValueError("top_k must be positive")
@@ -862,10 +863,10 @@ def render_markdown(results: list[dict[str, Any]], top_k: int) -> str:
             "a native GitHub dependency, or an open PR using a closing keyword. ‘Clear’ means only that",
             "none of those sampled signals fired; it does not mean a person judged the issue suitable.",
             "",
-            "This is not an independent oracle. Assignee and closing-PR signals overlap production",
-            "behavior, and closing keywords deliberately use the exact production parser. They test",
-            "integration consistency. Only lock and native-dependency fields can expose a constraint the",
-            "current product does not model. Their observed counts are shown below.",
+            "This is not an independent oracle. All four signals exercise production behavior,",
+            "and closing keywords deliberately use the exact production parser. They test integration",
+            "consistency rather than parser accuracy. Lock and native-dependency exposure counts are",
+            "shown below because the reviewed three-repository snapshot contained none.",
             "",
             f"All P@{top_k} values use {top_k} as the fixed denominator. Missing result slots count as",
             "misses, so returning one perfect candidate cannot score the same as returning ten.",
@@ -886,7 +887,7 @@ def render_markdown(results: list[dict[str, Any]], top_k: int) -> str:
                 f"GitHub operations counted at the HTTP boundary: "
                 f"{collection['github_read_requests']} GET, "
                 f"**{collection['github_write_requests']} writes**.",
-                f"Platform-only exposure: {constraints['locked']} locked issue(s), "
+                f"Platform-constraint exposure: {constraints['locked']} locked issue(s), "
                 f"{constraints['blocked_by_dependency']} native-dependency issue(s).",
                 "",
                 f"| ranking | candidates | returned / {top_k} | clear P@{top_k} | "

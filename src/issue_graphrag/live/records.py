@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from issue_graphrag.ingest.github_loader import github_blocking_dependency_count
 from issue_graphrag.live.models import Comment, LiveState, RepoEvent, RepoItem, SourceVersion
 from issue_graphrag.live.timeutil import max_iso, to_iso
 
@@ -157,6 +158,19 @@ def merge_item(
         assign("labels", _labels(payload))
     if "assignees" in payload:
         assign("assignees", _assignees(payload))
+    if "locked" in payload:
+        assign("locked", bool(payload.get("locked")))
+    if "blocking_dependency_count" in payload:
+        try:
+            count = max(int(payload.get("blocking_dependency_count") or 0), 0)
+        except (TypeError, ValueError):
+            count = 0
+        assign("blocking_dependency_count", count)
+    elif "issue_dependencies_summary" in payload:
+        assign(
+            "blocking_dependency_count",
+            github_blocking_dependency_count(payload),
+        )
     if "user" in payload:
         assign("author", _login(payload))
     if payload.get("html_url"):

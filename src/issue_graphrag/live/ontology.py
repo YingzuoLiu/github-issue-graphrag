@@ -6,8 +6,8 @@ is permitted to assert are declared here, in one place. Extraction output is
 validated against this schema before it is allowed to become a fact.
 
 The rule that matters most is the origin split. Predicates GitHub states
-outright (state, labels, assignees, references, closing keywords, changed files) are
-``github`` predicates and can only be written by the deterministic path. An
+outright (state, labels, assignees, lock/dependency status, references, closing
+keywords, changed files) are ``github`` predicates and can only be written by the deterministic path. An
 inferred fact that tries to claim one is rejected, so the model can never
 overwrite something the platform already told us.
 """
@@ -83,6 +83,22 @@ ENTITY_PREDICATES: dict[str, Predicate] = {
     ),
     "has_label": Predicate(
         "has_label", "entity", "github", "A label GitHub reports on the item.", domain=ITEM_TYPES
+    ),
+    "is_locked": Predicate(
+        "is_locked",
+        "entity",
+        "github",
+        "Whether GitHub reports the issue conversation as locked.",
+        domain=("ISSUE",),
+        functional=True,
+    ),
+    "has_blocking_dependencies": Predicate(
+        "has_blocking_dependencies",
+        "entity",
+        "github",
+        "Count of native GitHub dependencies currently blocking the issue.",
+        domain=("ISSUE",),
+        functional=True,
     ),
 }
 

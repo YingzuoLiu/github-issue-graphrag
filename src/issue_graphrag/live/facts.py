@@ -347,6 +347,60 @@ def _assignee_facts(item: RepoItem, moment: str, delivery_id: str | None) -> lis
     return facts
 
 
+def _platform_constraint_facts(
+    item: RepoItem,
+    moment: str,
+    delivery_id: str | None,
+) -> list[Fact]:
+    """Versioned GitHub-only facts that make an issue unavailable."""
+    facts: list[Fact] = []
+    if item.kind != "issue":
+        return facts
+    if item.locked:
+        evidence = Evidence(
+            kind="lock_status",
+            ref=item.document_id,
+            url=item.url,
+            snippet=f"{item.node_name} conversation is locked",
+        )
+        facts.append(
+            _fact(
+                kind="entity",
+                subject=item.node_name,
+                predicate="is_locked",
+                obj="true",
+                document_id=item.document_id,
+                moment=moment,
+                delivery_id=delivery_id,
+                description=f"{item.node_name} conversation is locked",
+                evidence=[evidence],
+            )
+        )
+
+    if item.blocking_dependency_count:
+        count = item.blocking_dependency_count
+        evidence = Evidence(
+            kind="native_dependency_summary",
+            ref=item.document_id,
+            url=item.url,
+            snippet=f"GitHub reports {count} blocking dependencies for {item.node_name}",
+        )
+        facts.append(
+            _fact(
+                kind="entity",
+                subject=item.node_name,
+                predicate="has_blocking_dependencies",
+                obj=str(count),
+                document_id=item.document_id,
+                moment=moment,
+                delivery_id=delivery_id,
+                description=f"GitHub reports {count} blocking dependencies",
+                evidence=[evidence],
+            )
+        )
+    return facts
+
+
 def github_facts_for_item(
     item: RepoItem,
     index: ItemIndex,
@@ -356,9 +410,9 @@ def github_facts_for_item(
 ) -> list[Fact]:
     """Derive every fact GitHub states outright for one issue or pull request.
 
-    Nothing here is inferred. State, labels, assignees, explicit references,
-    closing keywords and changed files all come straight from the payload, so
-    an LLM can never overwrite what GitHub already told us.
+    Nothing here is inferred. State, labels, assignees, lock/dependency status,
+    explicit references, closing keywords and changed files all come straight
+    from the payload, so an LLM can never overwrite what GitHub already told us.
     """
     self_evidence = Evidence(
         kind="item",
@@ -411,4 +465,5 @@ def github_facts_for_item(
     facts.extend(_reference_facts(item, index, moment, delivery_id, text_units or []))
     facts.extend(_file_facts(item, moment, delivery_id))
     facts.extend(_assignee_facts(item, moment, delivery_id))
+    facts.extend(_platform_constraint_facts(item, moment, delivery_id))
     return facts

@@ -38,12 +38,14 @@ def test_an_inferred_fact_may_not_assert_a_github_predicate():
         inferred("PR #950", "touches", "kafka_backend.py"),
         inferred("Issue #944", "assigned_to", "@octocat"),
         inferred("Issue #944", "has_state", "closed", kind="entity"),
+        inferred("Issue #944", "is_locked", "true", kind="entity"),
+        inferred("Issue #944", "has_blocking_dependencies", "2", kind="entity"),
     ]
 
     kept, rejected = validate_inferred(facts)
 
     assert kept == []
-    assert len(rejected) == 5
+    assert len(rejected) == 7
     assert all("may only be asserted by GitHub" in reason or "not an inferable" in reason
                for _, reason in rejected)
 

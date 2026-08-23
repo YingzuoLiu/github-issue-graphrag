@@ -122,6 +122,8 @@ def score_issue(graph: nx.Graph, issue: str) -> Opportunity:
     claims = _claim_links(graph, issue)
     assignees = _assignees(graph, issue)
     blockers = _blockers(graph, issue)
+    locked = bool(data.get("locked", False))
+    blocking_dependency_count = int(data.get("blocking_dependency_count", 0))
 
     score = BASE_SCORE
     reasons.append(f"open issue (+{BASE_SCORE:.2f})")
@@ -141,9 +143,25 @@ def score_issue(graph: nx.Graph, issue: str) -> Opportunity:
         evidence.append(
             OpportunityEvidence(label=f"blocked by {blocker}", url=graph.nodes[blocker].get("url"))
         )
+    platform_blocks: list[str] = []
     if blockers:
+        platform_blocks.append(f"blocked by open {', '.join(blockers)}")
+    if locked:
+        evidence.append(OpportunityEvidence(label="issue conversation is locked", url=url))
+        platform_blocks.append("issue conversation is locked")
+    if blocking_dependency_count:
+        evidence.append(
+            OpportunityEvidence(
+                label=f"GitHub reports {blocking_dependency_count} blocking dependencies",
+                url=url,
+            )
+        )
+        platform_blocks.append(
+            f"GitHub reports {blocking_dependency_count} blocking dependencies"
+        )
+    if platform_blocks:
         score -= BLOCKED_PENALTY
-        reasons.append(f"blocked by open {', '.join(blockers)} (-{BLOCKED_PENALTY:.2f})")
+        reasons.append(f"{'; '.join(platform_blocks)} (-{BLOCKED_PENALTY:.2f})")
 
     claimed_by = [node for node, _ in claims]
     for assignee in assignees:
@@ -170,7 +188,7 @@ def score_issue(graph: nx.Graph, issue: str) -> Opportunity:
 
     if claims or assignees:
         status = "claimed"
-    elif blockers:
+    elif platform_blocks:
         status = "blocked"
     else:
         status = "available"
@@ -188,6 +206,8 @@ def score_issue(graph: nx.Graph, issue: str) -> Opportunity:
         claimed_by=claimed_by,
         assignees=assignees,
         blocked_by=blockers,
+        locked=locked,
+        blocking_dependency_count=blocking_dependency_count,
         reasons=reasons,
         evidence=evidence,
     )

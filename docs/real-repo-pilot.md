@@ -116,12 +116,11 @@ The platform-constraint label flags an issue if it has an assignee, is locked, h
 dependency, or an open PR uses a closing keyword for it. A plain PR reference is ambiguous; the
 report lists it for possible future review instead of declaring it correct or incorrect.
 
-This label is **not an independent oracle**. Assignee and closing-PR signals overlap production
-behavior, and closing keywords intentionally use the exact production parser so the evaluator
-cannot drift from it. Those checks measure integration consistency, not parser or recommendation
-accuracy. Locked and native-dependency fields are the only sampled constraints the product does
-not currently model, so the report exposes their occurrence counts instead of treating a zero
-contradiction rate as general quality evidence.
+This label is **not an independent oracle**. All four signals exercise production behavior, and
+closing keywords intentionally use the exact production parser so the evaluator cannot drift from
+it. Those checks measure integration consistency, not parser or recommendation accuracy. The
+report exposes locked and native-dependency occurrence counts because the reviewed sample had no
+live exposure on those two paths; a zero contradiction rate is not general quality evidence.
 
 Engineering checks and measures:
 
@@ -158,8 +157,9 @@ repository activity.
 
 The zero current contradictions confirm that the repaired product reads the sampled shared facts
 consistently; they do not estimate recommendation accuracy. In this sample, locked and native
-dependency counts were zero in every repository, so the only two non-overlapping constraint paths
-received no live exposure. The fixed-denominator correction also changes PydanticAI from the old
+dependency counts were zero in every repository, so those two production paths received no live
+exposure and remain covered by deterministic regression tests. The fixed-denominator correction
+also changes PydanticAI from the old
 6/6 = 100% presentation to 6/10 = 60% on the reviewed snapshot; the refreshed committed run has
 seven returned candidates and correctly reports 7/10 = 70%.
 

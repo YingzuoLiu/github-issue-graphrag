@@ -187,6 +187,8 @@ def render_opportunities(graph, caption: str) -> None:
                 "assignees": ", ".join(item.assignees),
                 "claimed by": ", ".join(item.claimed_by),
                 "blocked by": ", ".join(item.blocked_by),
+                "locked": item.locked,
+                "native blockers": item.blocking_dependency_count,
             }
             for item in ranked
         ],
