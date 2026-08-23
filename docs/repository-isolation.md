@@ -4,7 +4,7 @@ The live index keeps each repository in an independent local lane. This avoids t
 modes of the earlier single-path prototype: one repository overwriting another's state, and one
 failed semantic update obscuring the health of every repository.
 
-## Existing boundaries and the remaining gap
+## Boundary and design rationale
 
 `LiveState` already models exactly one repository, and the webhook receiver already allowlists one
 repository per process. The missing boundary was storage: state, event log and inbox defaulted to
