@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import copy
+import json
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from issue_graphrag.pilot import (
     GitHubPilotClient,
+    contribution_regression_signature,
+    create_monitoring_run_directory,
     evaluate_snapshot,
     make_snapshot,
+    monitoring_run_id,
     render_markdown,
+    snapshot_from_payload,
+    snapshot_to_payload,
 )
 
 REPO = "example/project"
 NOW = "2026-08-22T10:00:00Z"
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "contribution"
 
 
 def _issue(
@@ -122,6 +133,66 @@ def test_pilot_client_uses_only_gets_and_groups_recent_comments():
     assert all(call[1]["headers"]["User-Agent"] for call in session.calls)
     assert snapshot.seed["items"][0]["comments"]["99"]["body"] == "I can reproduce this."
     assert len(snapshot.fingerprint) == 64
+
+
+def test_pilot_snapshot_round_trip_is_compact_and_integrity_checked():
+    snapshot = make_snapshot(
+        REPO,
+        [_issue(1, labels=["help wanted"]), _pull(2, "Fixes #1")],
+        [],
+        fetched_at=NOW,
+        request_count=2,
+    )
+
+    payload = snapshot_to_payload(
+        snapshot,
+        collection_parameters={"issue_limit": 1, "pull_limit": 1},
+    )
+    restored = snapshot_from_payload(payload)
+
+    assert payload["source"]["provider"] == "GitHub REST API"
+    assert payload["collection"]["parameters"] == {
+        "issue_limit": 1,
+        "pull_limit": 1,
+    }
+    assert restored.fingerprint == snapshot.fingerprint
+    assert contribution_regression_signature(restored) == (
+        contribution_regression_signature(snapshot)
+    )
+
+    tampered = copy.deepcopy(payload)
+    tampered["raw_items"][0]["labels"] = []
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        snapshot_from_payload(tampered)
+
+
+def test_monitoring_run_directories_are_timestamped_and_never_reused(tmp_path):
+    assert monitoring_run_id("2026-08-22T10:00:00Z") == "20260822T100000Z"
+    destination = create_monitoring_run_directory(tmp_path, NOW)
+
+    assert destination == tmp_path / "20260822T100000Z"
+    with pytest.raises(FileExistsError):
+        create_monitoring_run_directory(tmp_path, NOW)
+
+
+def test_graphiti_contribution_contract_matches_reviewed_golden_snapshot():
+    snapshot_payload = json.loads(
+        (FIXTURE_DIR / "graphiti_snapshot.json").read_text(encoding="utf-8")
+    )
+    expected = json.loads(
+        (FIXTURE_DIR / "graphiti_expected.json").read_text(encoding="utf-8")
+    )
+
+    snapshot = snapshot_from_payload(snapshot_payload)
+    actual = contribution_regression_signature(snapshot)
+
+    assert snapshot.repo == "getzep/graphiti"
+    assert snapshot.write_request_count == 0
+    assert {item["status"] for item in actual["opportunities"]} >= {
+        "available",
+        "claimed",
+    }
+    assert actual == expected
 
 
 def test_pilot_models_assignees_while_separating_ambiguous_pr_references():

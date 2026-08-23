@@ -60,6 +60,36 @@ Pilot 0 uses no LLM. These are deterministic:
 Model extraction is deferred. Semantic relevance cannot be judged safely until factual
 availability is reliable, and an LLM cannot serve as the ground truth for its own recommendation.
 
+## M1 regression evidence baseline
+
+The live pilot and the deterministic release gate have different jobs:
+
+- `tests/fixtures/contribution/graphiti_snapshot.json` is a compact, checked-in snapshot of 25
+  public Graphiti issues, 25 public pull requests and 50 recent public comments. It records the
+  GitHub API source, fetch time, collection limits, two measured GET requests, zero writes and a
+  content fingerprint.
+- `tests/fixtures/contribution/graphiti_expected.json` freezes the exact production
+  `opportunities()` ordering plus every issue's `status`, `score`, `reasons` and evidence links.
+- `test_graphiti_contribution_contract_matches_reviewed_golden_snapshot` replays the snapshot
+  offline in CI. A scoring, classification, explanation, evidence or ordering change requires an
+  explicit expected-file update and review.
+
+The fixture is not refreshed automatically. The refresh command defaults to a no-write preview:
+
+```bash
+python scripts/refresh_contribution_fixture.py
+```
+
+It prints the candidate fingerprint, HTTP counts and status distribution. After reviewing that
+preview, an intentional contract update is accepted with:
+
+```bash
+python scripts/refresh_contribution_fixture.py --accept
+```
+
+`--accept` replaces both files together; the resulting diff is the review surface. This checked-in
+snapshot is deterministic CI evidence, not a claim that current Graphiti data still looks the same.
+
 ## Repositories
 
 The initial set is intentionally not three copies of the same workload:
@@ -178,6 +208,13 @@ They are not required to merge the engineering work or to interpret Pilot 0.
 python scripts/run_real_repo_pilot.py
 ```
 
-An optional `GITHUB_TOKEN` raises the read-rate limit. The outputs are
-`eval/pilot_results.json` and `eval/pilot_results.md`. The report stores URLs, compact examples and
-a fingerprint, not a repository-wide copy of issue and comment bodies.
+An optional `GITHUB_TOKEN` raises the read-rate limit. Each run reserves an immutable UTC directory,
+for example `eval/pilot_runs/20260823T020000Z/`, containing `results.json` and `report.md`. Reusing a
+run directory or explicit output path fails instead of overwriting history. The report stores URLs,
+compact examples and a fingerprint, not a repository-wide copy of issue and comment bodies.
+
+`.github/workflows/contribution-pilot.yml` runs the same read-only command every Monday and on
+manual dispatch. It has `contents: read`, uploads the timestamped directory as a 30-day workflow
+artifact and fails if the contradiction, causal-evidence or zero-write engineering gate fails.
+These time-varying runs are monitoring evidence; they do not replace the checked-in golden fixture
+and do not run as deterministic pull-request CI.
