@@ -345,6 +345,70 @@ def test_orphan_reconciliation_releases_only_work_never_dispatched(tmp_path):
     assert ledger.usage_summary(final).daily_calls == 2
 
 
+def test_rejected_reservation_still_commits_dispatched_orphan_reconciliation(tmp_path):
+    path = tmp_path / "llm_operations.sqlite"
+    policy = QuotaPolicy(daily_calls=1, monthly_cost_usd=100)
+    ledger = QuotaLedger(path, policy, reservation_lease_seconds=300)
+    identity = ExtractionIdentity("sig", "openrouter", "model")
+    unit = units(1)[0]
+    orphan = ledger.reserve(
+        repo="owner/repo",
+        identity=identity,
+        unit=unit,
+        estimated_input_tokens=10,
+        max_output_tokens=10,
+        bootstrap=False,
+        now=NOW,
+    )
+    ledger.mark_dispatched(orphan, NOW)
+
+    later = "2026-08-24T00:05:01Z"
+    with pytest.raises(QuotaExceeded, match="daily calls"):
+        ledger.reserve(
+            repo="owner/repo",
+            identity=identity,
+            unit=unit,
+            estimated_input_tokens=10,
+            max_output_tokens=10,
+            bootstrap=False,
+            now=later,
+        )
+
+    assert ledger.counts() == {"unknown": 1}
+    with sqlite3.connect(path) as connection:
+        status, last_error = connection.execute(
+            "SELECT status, last_error FROM llm_requests"
+        ).fetchone()
+    assert status == "unknown"
+    assert last_error == "provider outcome unknown after reservation lease expired"
+
+
+def test_usage_summary_reconciles_expired_undispatched_orphans(tmp_path):
+    path = tmp_path / "llm_operations.sqlite"
+    policy = QuotaPolicy(daily_calls=3, monthly_cost_usd=100)
+    ledger = QuotaLedger(path, policy, reservation_lease_seconds=300)
+    identity = ExtractionIdentity("sig", "openrouter", "model")
+    unit = units(1)[0]
+    for _ in range(3):
+        ledger.reserve(
+            repo="owner/repo",
+            identity=identity,
+            unit=unit,
+            estimated_input_tokens=10,
+            max_output_tokens=10,
+            bootstrap=False,
+            now=NOW,
+        )
+
+    summary = ledger.usage_summary("2026-08-24T00:05:01Z")
+
+    assert summary.daily_calls == 0
+    assert summary.daily_input_tokens == 0
+    assert summary.daily_output_tokens == 0
+    assert summary.monthly_cost_usd == 0
+    assert summary.request_states == {"released": 3}
+
+
 def test_provider_dispatch_starts_only_after_durable_dispatch_marker(tmp_path):
     path = tmp_path / "llm_operations.sqlite"
 

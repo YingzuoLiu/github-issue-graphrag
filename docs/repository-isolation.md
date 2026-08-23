@@ -47,7 +47,9 @@ actual usage metadata, and serializes the all-repository daily/monthly hard caps
 is repo-qualified; it contains no extracted result or source text. Reservations are marked
 dispatched before the provider boundary. Expired undispatched rows are released; expired dispatched
 rows become conservative `unknown` outcomes. Incomplete provider usage keeps the reservation's
-token and cost estimates, so missing metadata cannot make a hard cap fail open.
+token and cost estimates, so missing metadata cannot make a hard cap fail open. Orphan reconciliation
+has its own committed transaction before admission, and the status view reconciles before reading;
+a rejected reservation therefore cannot roll back the operator-visible terminal state.
 
 ## Bounded bootstrap
 

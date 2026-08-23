@@ -714,7 +714,9 @@ retain their conservative reservation. A leased reservation is durably marked di
 the HTTP call; an expired reservation that never crossed that boundary is released, while an
 expired dispatched attempt becomes `unknown`. If OpenRouter ever omits any documented usage field,
 the ledger retains the conservative token and cost reservation instead of settling missing values
-to zero. Cache hits consume no provider-call quota.
+to zero. Orphan reconciliation commits independently of later admission, and `--status` performs
+the same safe reconciliation before reporting usage, so a full cap cannot hide terminal orphan
+labels behind a rolled-back reservation attempt. Cache hits consume no provider-call quota.
 
 The model and quota values can be changed later. Quota-only changes do not invalidate cache;
 changing the requested model does. Prompt text changes require a deliberate new prompt version and

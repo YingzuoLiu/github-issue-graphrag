@@ -436,13 +436,17 @@ class QuotaLedger:
             (value,),
         ).fetchone()
 
-    def _reconcile_orphans(self, connection: sqlite3.Connection, now: str) -> None:
+    def _reconcile_orphans(
+        self,
+        connection: sqlite3.Connection,
+        now: str,
+    ) -> dict[str, int]:
         """Release provably undispatched work; retain dispatched work conservatively."""
         moment = to_iso(now)
         stale_before = to_iso(
             parse_iso(moment) - timedelta(seconds=self.reservation_lease_seconds)
         )
-        connection.execute(
+        released = connection.execute(
             """
             UPDATE llm_requests
             SET released_at = ?, completed_at = ?,
@@ -452,7 +456,7 @@ class QuotaLedger:
             """,
             (moment, moment, stale_before),
         )
-        connection.execute(
+        unknown = connection.execute(
             """
             UPDATE llm_requests
             SET status = 'unknown', completed_at = ?,
@@ -462,6 +466,13 @@ class QuotaLedger:
             """,
             (moment, stale_before),
         )
+        return {"released": released.rowcount, "unknown": unknown.rowcount}
+
+    def reconcile_orphans(self, now: str) -> dict[str, int]:
+        """Persist expired-reservation state independently of later admission."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            return self._reconcile_orphans(connection, now)
 
     def reserve(
         self,
@@ -480,9 +491,13 @@ class QuotaLedger:
         day = moment.strftime("%Y-%m-%d")
         month = moment.strftime("%Y-%m")
         cost = self.policy.reserved_cost(estimated_input_tokens, max_output_tokens)
+        # Reconciliation owns its commit. If admission below raises, operators
+        # must still see why expired work is released or conservatively unknown.
+        # Another worker may reserve between these transactions; the admission
+        # transaction re-reads all usage, so the hard-cap decision stays atomic.
+        self.reconcile_orphans(now)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._reconcile_orphans(connection, now)
             daily = self._usage(connection, "utc_day", day)
             monthly = self._usage(connection, "utc_month", month)
             checks = [
@@ -623,25 +638,34 @@ class QuotaLedger:
                 (to_iso(now), f"{type(error).__name__}: {error}"[:4000], reservation.reservation_id),
             )
 
-    def counts(self) -> dict[str, int]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT CASE WHEN released_at IS NOT NULL THEN 'released' ELSE status END
-                           AS effective_status,
-                       COUNT(*) AS count
-                FROM llm_requests GROUP BY effective_status
-                """
-            ).fetchall()
+    @staticmethod
+    def _counts(connection: sqlite3.Connection) -> dict[str, int]:
+        rows = connection.execute(
+            """
+            SELECT CASE WHEN released_at IS NOT NULL THEN 'released' ELSE status END
+                       AS effective_status,
+                   COUNT(*) AS count
+            FROM llm_requests GROUP BY effective_status
+            """
+        ).fetchall()
         return {row["effective_status"]: int(row["count"]) for row in rows}
 
+    def counts(self) -> dict[str, int]:
+        with self._connect() as connection:
+            return self._counts(connection)
+
     def usage_summary(self, now: str) -> UsageSummary:
+        # Status is also the operator reconciliation path: it persists terminal
+        # orphan labels before reporting effective usage and request states.
+        self.reconcile_orphans(now)
         moment = parse_iso(to_iso(now))
         day = moment.strftime("%Y-%m-%d")
         month = moment.strftime("%Y-%m")
         with self._connect() as connection:
+            connection.execute("BEGIN")
             daily = self._usage(connection, "utc_day", day)
             monthly = self._usage(connection, "utc_month", month)
+            request_states = self._counts(connection)
         return UsageSummary(
             utc_day=day,
             daily_calls=int(daily["calls"]),
@@ -649,7 +673,7 @@ class QuotaLedger:
             daily_output_tokens=int(daily["output_tokens"]),
             utc_month=month,
             monthly_cost_usd=float(monthly["cost_usd"]),
-            request_states=self.counts(),
+            request_states=request_states,
         )
 
 
