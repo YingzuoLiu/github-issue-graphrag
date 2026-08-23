@@ -7,6 +7,7 @@ from pathlib import Path
 
 from issue_graphrag.config import load_settings
 from issue_graphrag.live.inbox import DeliveryInbox
+from issue_graphrag.live.repositories import RepoRegistry
 from issue_graphrag.live.server import (
     DEFAULT_MAX_BODY_BYTES,
     DEFAULT_READ_TIMEOUT_SECONDS,
@@ -45,7 +46,9 @@ def main() -> None:
     if args.read_timeout_seconds <= 0:
         parser.error("--read-timeout-seconds must be positive")
 
-    inbox_path = args.inbox or settings.processed_data_dir / "webhook_inbox.sqlite"
+    repo_storage = RepoRegistry(settings.repo_data_dir, settings.github_repos).register(repo)
+    repo = repo_storage.repo
+    inbox_path = args.inbox or repo_storage.inbox
     receiver = WebhookReceiver(
         secret=secret,
         repo=repo,

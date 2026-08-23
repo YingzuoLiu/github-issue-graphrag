@@ -15,6 +15,7 @@ from issue_graphrag.live.github_api import pull_request_number
 from issue_graphrag.live.inbox import DeliveryInbox
 from issue_graphrag.live.indexer import apply_event
 from issue_graphrag.live.models import GraphDelta, LiveState, RepoEvent
+from issue_graphrag.live.repositories import read_freshness, write_freshness
 from issue_graphrag.live.store import read_state, write_state
 from issue_graphrag.live.timeutil import now_utc, to_iso
 
@@ -90,6 +91,7 @@ class DeliveryProcessor:
         lease_seconds: int = 300,
         retry_delay_seconds: int = 30,
         max_attempts: int = 5,
+        freshness_path: Path | None = None,
     ):
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
@@ -106,6 +108,24 @@ class DeliveryProcessor:
         self.lease_seconds = lease_seconds
         self.retry_delay_seconds = retry_delay_seconds
         self.max_attempts = max_attempts
+        self.freshness_path = Path(freshness_path) if freshness_path is not None else None
+
+    def _record_freshness(
+        self,
+        *,
+        state_commit_at: str | None,
+        semantic_updated_at: str,
+        error: str | None,
+    ) -> None:
+        if self.freshness_path is None:
+            return
+        freshness = read_freshness(self.freshness_path, self.repo)
+        if state_commit_at is not None:
+            freshness.last_state_commit_at = state_commit_at
+        freshness.semantic_status = "degraded" if error else "current"
+        freshness.semantic_updated_at = semantic_updated_at
+        freshness.last_error = error
+        write_freshness(self.freshness_path, freshness)
 
     def _state(self) -> LiveState:
         if not self.state_path.exists():
@@ -172,6 +192,11 @@ class DeliveryProcessor:
                 self.event_log.append_once(event)
                 heartbeat.check()
             completed_at = to_iso(now) if now else to_iso(now_utc())
+            self._record_freshness(
+                state_commit_at=event.indexed_at or completed_at,
+                semantic_updated_at=completed_at,
+                error=None,
+            )
             self.inbox.mark_succeeded(event.delivery_id, lease_id, now=completed_at)
             return ProcessingResult(event.delivery_id, "succeeded", delta=delta)
         except Exception as exc:
@@ -184,10 +209,22 @@ class DeliveryProcessor:
                 retry_delay_seconds=self.retry_delay_seconds,
                 max_attempts=self.max_attempts,
             )
+            error = f"{type(exc).__name__}: {exc}"
+            try:
+                self._record_freshness(
+                    state_commit_at=None,
+                    semantic_updated_at=completed_at,
+                    error=error,
+                )
+            except Exception as freshness_exc:
+                error += (
+                    "; freshness update failed: "
+                    f"{type(freshness_exc).__name__}: {freshness_exc}"
+                )
             return ProcessingResult(
                 event.delivery_id,
                 outcome,
-                error=f"{type(exc).__name__}: {exc}",
+                error=error,
             )
 
 

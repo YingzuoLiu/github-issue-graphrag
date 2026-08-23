@@ -15,6 +15,7 @@ from issue_graphrag.config import load_settings
 from issue_graphrag.live.contribution import opportunities
 from issue_graphrag.live.models import LiveState
 from issue_graphrag.live.projection import project_graph
+from issue_graphrag.live.repositories import RepoRegistry
 from issue_graphrag.live.store import read_state
 from issue_graphrag.live.viz import distinct_relations
 
@@ -114,6 +115,7 @@ def print_history(state: LiveState, node: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, default=None, help="path to live_state.json")
+    parser.add_argument("--repo", help="configured owner/name repository")
     parser.add_argument("--as-of", default=None, help="project the graph at an ISO timestamp")
     parser.add_argument("--top", type=int, default=10)
     parser.add_argument("--include-closed", action="store_true")
@@ -124,7 +126,18 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = load_settings()
-    state_path = args.state or settings.processed_data_dir / "live_state.json"
+    registry = RepoRegistry(settings.repo_data_dir, settings.github_repos)
+    repositories = registry.repositories()
+    if args.state is not None:
+        state_path = args.state
+    elif args.repo is not None:
+        state_path = registry.paths(args.repo).state
+    elif len(repositories) == 1:
+        state_path = registry.paths(repositories[0]).state
+    else:
+        state_path = settings.processed_data_dir / "live_state.json"
+        if not state_path.exists() and len(repositories) > 1:
+            parser.error("--repo is required when multiple repositories are configured")
     if not state_path.exists():
         raise SystemExit(f"{state_path} not found. Run scripts/replay_events.py first.")
 

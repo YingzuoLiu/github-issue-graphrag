@@ -18,6 +18,12 @@ from issue_graphrag.live.indexer import apply_event, bootstrap, rebuild
 from issue_graphrag.live.models import GraphDelta, LiveState
 from issue_graphrag.live.ontology import describe
 from issue_graphrag.live.projection import graph_signature, project_graph
+from issue_graphrag.live.repositories import (
+    RepoRegistry,
+    read_freshness,
+    repo_paths,
+    write_freshness,
+)
 from issue_graphrag.live.records import seed_items
 from issue_graphrag.live.runtime import configured_extractor
 from issue_graphrag.live.store import read_state, write_state
@@ -111,8 +117,13 @@ def main() -> None:
         return
 
     settings = load_settings()
-    state_path = args.state or settings.processed_data_dir / "live_state.json"
-    log_path = args.event_log or settings.processed_data_dir / "event_log.jsonl"
+    with args.seed.open("r", encoding="utf-8") as handle:
+        snapshot = json.load(handle)
+    repo = str(snapshot["repo"])
+    registry = RepoRegistry(settings.repo_data_dir, settings.github_repos)
+    repo_storage = repo_paths(settings.repo_data_dir, repo) if args.no_write else registry.register(repo)
+    state_path = args.state or repo_storage.state
+    log_path = args.event_log or repo_storage.event_log
 
     extractor = configured_extractor(
         rules=None if args.llm else args.rules,
@@ -123,10 +134,7 @@ def main() -> None:
         state = read_state(state_path)
         print(f"Resumed live state from {state_path} ({len(state.processed_deliveries)} deliveries)")
     else:
-        with args.seed.open("r", encoding="utf-8") as handle:
-            snapshot = json.load(handle)
-        repo = snapshot["repo"]
-        state = bootstrap(repo, seed_items(repo, snapshot["items"]), extractor)
+        state = bootstrap(repo_storage.repo, seed_items(repo_storage.repo, snapshot["items"]), extractor)
         graph = project_graph(state)
         print(
             f"Bootstrapped {repo}: {len(state.items)} items, "
@@ -182,6 +190,12 @@ def main() -> None:
 
     if not args.no_write:
         write_state(state_path, state)
+        freshness = read_freshness(repo_storage.freshness, state.repo)
+        freshness.last_state_commit_at = state.last_event_at
+        freshness.semantic_status = "current"
+        freshness.semantic_updated_at = state.last_event_at
+        freshness.last_error = None
+        write_freshness(repo_storage.freshness, freshness)
         print(f"\nWrote {state_path}")
         print(f"Wrote {log_path}")
 
