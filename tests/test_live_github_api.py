@@ -3,7 +3,7 @@ from __future__ import annotations
 from conftest import REPO, issue_payload, make_event, pull_payload
 
 from issue_graphrag.ingest.github_loader import to_seed_item
-from issue_graphrag.live.github_api import GitHubClient, pull_request_number
+from issue_graphrag.live.github_api import GitHubClient, dependency_issue, pull_request_number
 
 
 class FakeResponse:
@@ -65,6 +65,36 @@ def test_pull_request_number_understands_both_pr_and_comment_payloads():
     assert pull_request_number(pull) == 950
     assert pull_request_number(comment) == 951
     assert pull_request_number(issue) is None
+
+
+def test_dependency_issue_uses_the_blocked_issues_repository():
+    event = make_event(
+        "d-dependency",
+        "issue_dependencies",
+        {
+            "action": "blocked_by_added",
+            "blocked_issue": {
+                **issue_payload(7),
+                "repository_url": f"https://api.github.com/repos/{REPO}",
+            },
+            "blocking_issue": issue_payload(8),
+        },
+        "2024-06-01T00:00:03Z",
+    )
+
+    assert dependency_issue(event) == (REPO, 7)
+
+
+def test_open_blocking_dependency_count_is_paginated_and_ignores_closed_issues():
+    first_page = [{"state": "open"}] * 60 + [{"state": "closed"}] * 40
+    session = FakeSession([first_page, [{"state": "open"}, {"state": "closed"}]])
+    client = GitHubClient(token="token", session=session)
+
+    count = client.fetch_open_blocking_dependency_count(REPO, 7)
+
+    assert count == 61
+    assert [call[1]["params"]["page"] for call in session.calls] == [1, 2]
+    assert session.calls[0][0].endswith("/issues/7/dependencies/blocked_by")
 
 
 def test_snapshot_loader_preserves_sorted_unique_assignees():

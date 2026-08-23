@@ -87,6 +87,7 @@ def test_registry_and_freshness_keep_two_repositories_independent(tmp_path):
     assert first.state != second.state
     assert first.inbox != second.inbox
     assert first.extraction_cache != second.extraction_cache
+    assert first.extraction_cache.name == "extraction_cache.sqlite"
 
     write_freshness(
         first.freshness,

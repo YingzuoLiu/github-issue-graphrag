@@ -11,7 +11,7 @@ from typing import Literal, Protocol
 
 from issue_graphrag.live.events import EventLog
 from issue_graphrag.live.extraction import Extractor
-from issue_graphrag.live.github_api import pull_request_number
+from issue_graphrag.live.github_api import dependency_issue, pull_request_number
 from issue_graphrag.live.inbox import DeliveryInbox
 from issue_graphrag.live.indexer import apply_event
 from issue_graphrag.live.models import GraphDelta, LiveState, RepoEvent
@@ -20,8 +20,10 @@ from issue_graphrag.live.store import read_state, write_state
 from issue_graphrag.live.timeutil import now_utc, to_iso
 
 
-class PullFileClient(Protocol):
+class GitHubReadClient(Protocol):
     def fetch_pull_request_files(self, repo: str, number: int) -> list[str]: ...
+
+    def fetch_open_blocking_dependency_count(self, repo: str, number: int) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -87,7 +89,8 @@ class DeliveryProcessor:
         state_path: Path,
         event_log: EventLog,
         extractor: Extractor,
-        github: PullFileClient | None = None,
+        github: GitHubReadClient | None = None,
+        hydrate_pull_request_files: bool = True,
         lease_seconds: int = 300,
         retry_delay_seconds: int = 30,
         max_attempts: int = 5,
@@ -105,6 +108,7 @@ class DeliveryProcessor:
         self.event_log = event_log
         self.extractor = extractor
         self.github = github
+        self.hydrate_pull_request_files = hydrate_pull_request_files
         self.lease_seconds = lease_seconds
         self.retry_delay_seconds = retry_delay_seconds
         self.max_attempts = max_attempts
@@ -136,8 +140,24 @@ class DeliveryProcessor:
         return state
 
     def _hydrate(self, event: RepoEvent, state: LiveState) -> None:
+        dependency = dependency_issue(event)
+        if dependency is not None:
+            dependency_repo, number = dependency
+            if dependency_repo.casefold() != self.repo.casefold():
+                return
+            if self.github is None:
+                raise RuntimeError("issue_dependencies processing requires a GitHub read client")
+            event.attachments["blocking_dependency_count"] = (
+                self.github.fetch_open_blocking_dependency_count(dependency_repo, number)
+            )
+            return
+
         number = pull_request_number(event)
-        if number is None or self.github is None:
+        if (
+            number is None
+            or self.github is None
+            or not self.hydrate_pull_request_files
+        ):
             return
         known = state.items.get(f"{event.repo}#pull-{number}")
         if event.event_type == "issue_comment" and known is not None and known.files:

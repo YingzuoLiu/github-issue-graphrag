@@ -45,6 +45,32 @@ def test_receiver_verifies_and_enqueues_without_processing(tmp_path):
     assert stored.event.received_at == NOW
 
 
+def test_receiver_accepts_native_issue_dependency_events(tmp_path):
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    receiver = WebhookReceiver(secret=SECRET, repo=REPO, inbox=inbox)
+    payload = {
+        "action": "blocked_by_added",
+        "repository": {"full_name": REPO},
+        "blocked_issue": {
+            **issue_payload(7),
+            "repository_url": f"https://api.github.com/repos/{REPO}",
+        },
+        "blocking_issue": issue_payload(8),
+    }
+    body = json.dumps(payload).encode()
+    headers = {
+        "X-GitHub-Delivery": "dependency-1",
+        "X-GitHub-Event": "issue_dependencies",
+        "X-Hub-Signature-256": compute_signature(SECRET, body),
+    }
+
+    response = receiver.receive(headers, body, received_at=NOW)
+
+    assert response.status_code == 202
+    assert response.body["status"] == "enqueued"
+    assert inbox.get("dependency-1") is not None
+
+
 def test_receiver_refuses_untrusted_wrong_repo_and_conflicting_deliveries(tmp_path):
     inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
     receiver = WebhookReceiver(secret=SECRET, repo=REPO, inbox=inbox)

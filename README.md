@@ -665,7 +665,9 @@ python scripts/serve_webhooks.py --host 0.0.0.0 --port 8000
 python scripts/process_webhooks.py --llm
 ```
 
-Register `https://your-host/webhooks/github` for `issues`, `pull_request` and `issue_comment`.
+Register `https://your-host/webhooks/github` for `issues`, `pull_request`, `issue_comment` and
+`issue_dependencies`. Dependency deliveries are hydrated through GitHub's read-only REST API
+because their webhook payload identifies the related issues but does not include the active count.
 The included server is a small HTTP reference endpoint; put it behind a TLS reverse proxy that
 also enforces connection limits and rate limits. The endpoint itself bounds request reads to 30
 seconds by default (`--read-timeout-seconds`) so an unauthenticated slow client cannot pin a handler

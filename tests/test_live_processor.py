@@ -14,16 +14,29 @@ NOW = "2024-06-01T10:00:00Z"
 
 
 class FakeGitHubClient:
-    def __init__(self, files=None, error: Exception | None = None):
+    def __init__(
+        self,
+        files=None,
+        error: Exception | None = None,
+        dependency_counts=None,
+    ):
         self.files = files or []
         self.error = error
         self.calls = []
+        self.dependency_counts = list(dependency_counts or [0])
+        self.dependency_calls = []
 
     def fetch_pull_request_files(self, repo: str, number: int):
         self.calls.append((repo, number))
         if self.error:
             raise self.error
         return self.files
+
+    def fetch_open_blocking_dependency_count(self, repo: str, number: int):
+        self.dependency_calls.append((repo, number))
+        if self.error:
+            raise self.error
+        return self.dependency_counts.pop(0)
 
 
 class CountingExtractor:
@@ -148,6 +161,62 @@ def test_github_only_mode_leaves_changed_text_pending_for_a_future_extractor(tmp
     assert result is not None and result.status == "succeeded"
     state = read_state(tmp_path / "live_state.json")
     assert f"{REPO}#issue-7" not in state.extraction_signatures
+
+
+def test_dependency_webhooks_hydrate_active_count_and_clear_blocked_status(tmp_path):
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    blocked_issue = {
+        **issue_payload(7),
+        "repository_url": f"https://api.github.com/repos/{REPO}",
+    }
+    github = FakeGitHubClient(dependency_counts=[2, 0])
+    processor = _processor(tmp_path, inbox, github=github)
+
+    added = make_event(
+        "dependency-added",
+        "issue_dependencies",
+        {
+            "action": "blocked_by_added",
+            "blocked_issue": blocked_issue,
+            "blocking_issue": issue_payload(8),
+        },
+        NOW,
+    )
+    inbox.enqueue(added, now=NOW)
+    first = processor.process_one(now=NOW)
+
+    assert first is not None and first.status == "succeeded"
+    state = read_state(tmp_path / "live_state.json")
+    item = state.items[f"{REPO}#issue-7"]
+    assert item.blocking_dependency_count == 2
+    assert any(
+        fact.predicate == "has_blocking_dependencies" for fact in state.valid_facts()
+    )
+    stored = inbox.get("dependency-added")
+    assert stored is not None
+    assert stored.event.attachments["blocking_dependency_count"] == 2
+
+    removed_at = "2024-06-01T10:00:01Z"
+    removed = make_event(
+        "dependency-removed",
+        "issue_dependencies",
+        {
+            "action": "blocked_by_removed",
+            "blocked_issue": blocked_issue,
+            "blocking_issue": issue_payload(8),
+        },
+        removed_at,
+    )
+    inbox.enqueue(removed, now=removed_at)
+    second = processor.process_one(now=removed_at)
+
+    assert second is not None and second.status == "succeeded"
+    state = read_state(tmp_path / "live_state.json")
+    assert state.items[f"{REPO}#issue-7"].blocking_dependency_count == 0
+    assert not any(
+        fact.predicate == "has_blocking_dependencies" for fact in state.valid_facts()
+    )
+    assert github.dependency_calls == [(REPO, 7), (REPO, 7)]
 
 
 def test_crash_after_state_write_recovers_without_duplicate_extraction_or_log(tmp_path):

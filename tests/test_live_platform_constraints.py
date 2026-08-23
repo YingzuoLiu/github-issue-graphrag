@@ -36,7 +36,7 @@ def _opportunity(state):  # noqa: ANN001, ANN202 - compact assertion helper
     return opportunities(project_graph(state))[0]
 
 
-def test_seed_normalization_keeps_only_active_platform_constraints():
+def test_seed_normalization_uses_active_dependency_count_with_legacy_fallback():
     base = {
         "number": 1,
         "title": "Issue",
@@ -52,7 +52,7 @@ def test_seed_normalization_keeps_only_active_platform_constraints():
         {
             **base,
             "locked": False,
-            "issue_dependencies_summary": {"blocked_by": 0},
+            "issue_dependencies_summary": {"blocked_by": 0, "total_blocked_by": 2},
         },
         "issue",
     )
@@ -61,7 +61,15 @@ def test_seed_normalization_keeps_only_active_platform_constraints():
         {
             **base,
             "locked": True,
-            "issue_dependencies_summary": {"blocked_by": 0, "total_blocked_by": 2},
+            "issue_dependencies_summary": {"blocked_by": 1, "total_blocked_by": 2},
+        },
+        "issue",
+    )
+    legacy = to_seed_item(
+        REPO,
+        {
+            **base,
+            "issue_dependencies_summary": {"total_blocked_by": 2},
         },
         "issue",
     )
@@ -69,7 +77,8 @@ def test_seed_normalization_keeps_only_active_platform_constraints():
     assert "locked" not in clear
     assert "blocking_dependency_count" not in clear
     assert constrained["locked"] is True
-    assert constrained["blocking_dependency_count"] == 2
+    assert constrained["blocking_dependency_count"] == 1
+    assert legacy["blocking_dependency_count"] == 2
 
 
 @pytest.mark.parametrize(

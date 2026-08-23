@@ -169,23 +169,21 @@ def fetch_pull_request_files(
 
 
 def github_blocking_dependency_count(raw: dict[str, Any]) -> int:
-    """Read GitHub's native blocked-by summary without inferring dependencies.
+    """Read GitHub's active native blocked-by count without inferring dependencies.
 
     GitHub currently exposes counts in ``issue_dependencies_summary`` on the
-    issue payload. The field has appeared with both ``blocked_by`` and
-    ``total_blocked_by`` keys, so the live product and Pilot 0 share this one
-    compatibility boundary.
+    issue payload. ``blocked_by`` is the active count used for readiness, while
+    ``total_blocked_by`` also includes closed dependencies. The latter is only
+    a compatibility fallback for payloads that omit the active-count key.
     """
     summary = raw.get("issue_dependencies_summary") or {}
     if not isinstance(summary, dict):
         return 0
-    counts: list[int] = []
-    for key in ("blocked_by", "total_blocked_by"):
-        try:
-            counts.append(max(int(summary.get(key) or 0), 0))
-        except (TypeError, ValueError):
-            continue
-    return max(counts, default=0)
+    key = "blocked_by" if "blocked_by" in summary else "total_blocked_by"
+    try:
+        return max(int(summary.get(key) or 0), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def to_seed_item(

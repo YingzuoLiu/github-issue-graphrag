@@ -57,7 +57,7 @@ def repo_paths(root: Path, repo: str) -> RepoPaths:
         event_log=directory / "event_log.jsonl",
         inbox=directory / "inbox.db",
         bootstrap_seed=directory / "bootstrap_seed.json",
-        extraction_cache=directory / "extraction_cache.json",
+        extraction_cache=directory / "extraction_cache.sqlite",
         freshness=directory / "freshness.json",
     )
 
