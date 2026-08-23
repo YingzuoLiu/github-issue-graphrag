@@ -95,12 +95,30 @@ def refresh_deterministic(state: LiveState, moment: str, delivery_id: str) -> li
     return changes
 
 
-def _stale_documents(state: LiveState) -> list[str]:
+def _extraction_is_stale(state: LiveState, document_id: str, item: RepoItem) -> bool:
+    """The one definition of "this document still owes extraction".
+
+    Freshness reporting and the extraction pass have to agree on this. A
+    second copy of the comparison is how a worker starts calling stale state
+    ``current`` again.
+    """
+    return state.extraction_signatures.get(document_id) != item.extraction_signature()
+
+
+def pending_extraction_documents(state: LiveState) -> list[str]:
     """Documents whose extraction input changed since they were last extracted."""
     return sorted(
         document_id
         for document_id, item in state.items.items()
-        if state.extraction_signatures.get(document_id) != item.extraction_signature()
+        if _extraction_is_stale(state, document_id, item)
+    )
+
+
+def has_pending_extraction(state: LiveState) -> bool:
+    """Whether any document still owes semantic extraction."""
+    return any(
+        _extraction_is_stale(state, document_id, item)
+        for document_id, item in state.items.items()
     )
 
 
@@ -111,7 +129,7 @@ def refresh_inferred(
     delivery_id: str,
 ) -> tuple[list[FactChange], list[RejectedFact], list[str]]:
     """Run scoped extraction and let the ontology decide what may be stored."""
-    stale = _stale_documents(state)
+    stale = pending_extraction_documents(state)
     if not stale:
         return [], [], []
 

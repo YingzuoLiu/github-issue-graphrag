@@ -13,7 +13,7 @@ from issue_graphrag.live.events import EventLog
 from issue_graphrag.live.extraction import Extractor
 from issue_graphrag.live.github_api import dependency_issue, pull_request_number
 from issue_graphrag.live.inbox import DeliveryInbox
-from issue_graphrag.live.indexer import apply_event
+from issue_graphrag.live.indexer import apply_event, has_pending_extraction
 from issue_graphrag.live.models import GraphDelta, LiveState, RepoEvent
 from issue_graphrag.live.repositories import read_freshness, write_freshness
 from issue_graphrag.live.store import read_state, write_state
@@ -240,11 +240,7 @@ class DeliveryProcessor:
                 state_commit_at=event.indexed_at or completed_at,
                 semantic_updated_at=completed_at,
                 error=None,
-                semantic_pending=any(
-                    state.extraction_signatures.get(document_id)
-                    != item.extraction_signature()
-                    for document_id, item in state.items.items()
-                ),
+                semantic_pending=has_pending_extraction(state),
             )
             self.inbox.mark_succeeded(event.delivery_id, lease_id, now=completed_at)
             return ProcessingResult(event.delivery_id, "succeeded", delta=delta)
