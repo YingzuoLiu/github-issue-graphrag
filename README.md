@@ -22,8 +22,9 @@ The demo dataset is TrustGraph, but both halves work against any GitHub reposito
 
 ## Run it now
 
-No API key, no network, no Docker, no vector database. The shipped fixtures replay a small
-repository story through the full live pipeline:
+After cloning and installing dependencies, the replay itself needs no API key, network access,
+Docker or vector database. The shipped fixtures replay a small repository story through the live
+indexing core; they bypass the HTTP receiver, durable inbox and real LLM calls:
 
 ```bash
 git clone https://github.com/YingzuoLiu/github-issue-graphrag
@@ -32,7 +33,7 @@ python -m pip install -e .
 python scripts/replay_events.py --verify-rebuild
 ```
 
-Seven webhook deliveries later:
+After replaying seven normalized webhook fixtures:
 
 ```text
 [d-0004] issue_comment.deleted @ 2024-05-05T12:00:00Z
@@ -81,8 +82,8 @@ Contribution opportunities (now)
 ```
 
 The Streamlit app (`pip install -e ".[app]" && streamlit run app.py`) puts the same replay behind
-a timeline scrubber. Everything above runs offline; only the batch index and `--llm` extraction
-need a provider key.
+a timeline scrubber. After installation, everything above runs offline; only the batch index and
+`--llm` extraction need a provider key.
 
 ## Contents
 
