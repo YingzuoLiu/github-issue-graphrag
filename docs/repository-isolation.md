@@ -35,7 +35,7 @@ data/repos/
     inbox.db
     live_state.json
     event_log.jsonl
-    extraction_cache.json
+    extraction_cache.sqlite
     freshness.json
 ```
 
