@@ -7,7 +7,13 @@ import json
 from conftest import make_event, issue_payload, pull_payload
 
 from issue_graphrag.live.contribution import opportunities
-from issue_graphrag.live.indexer import apply_event, rebuild, replay
+from issue_graphrag.live.indexer import (
+    apply_event,
+    has_pending_extraction,
+    pending_extraction_documents,
+    rebuild,
+    replay,
+)
 from issue_graphrag.live.models import LiveState
 from issue_graphrag.live.projection import graph_signature, project_graph
 from issue_graphrag.live.store import read_state, write_state
@@ -216,3 +222,15 @@ def test_state_reader_backfills_only_a_new_field_version(seeded_state, tmp_path)
     assert migrated.assignees == []
     assert migrated.field_versions["title"].model_dump() == title_version
     assert migrated.field_versions["assignees"].key() == migrated.version_key()
+
+
+def test_pending_extraction_views_cannot_disagree(seeded_state):
+    """Freshness and the extraction pass must read one rule, not two copies."""
+    assert not has_pending_extraction(seeded_state)
+    assert pending_extraction_documents(seeded_state) == []
+
+    document_id = "trustgraph-ai/trustgraph#issue-875"
+    seeded_state.items[document_id].body += " a new sentence changes the input"
+
+    assert has_pending_extraction(seeded_state)
+    assert pending_extraction_documents(seeded_state) == [document_id]

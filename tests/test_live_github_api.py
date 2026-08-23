@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
 from conftest import REPO, issue_payload, make_event, pull_payload
 
+from issue_graphrag.http_boundary import ReadOnlyViolation
 from issue_graphrag.ingest.github_loader import to_seed_item
 from issue_graphrag.live.github_api import GitHubClient, dependency_issue, pull_request_number
 
@@ -111,3 +113,28 @@ def test_snapshot_loader_preserves_sorted_unique_assignees():
     seed = to_seed_item(REPO, raw, "issue")
 
     assert seed["assignees"] == ["hubot", "octocat"]
+
+
+def test_live_client_refuses_a_write_before_it_reaches_github():
+    session = FakeSession([])
+    client = GitHubClient(token="token", session=session)
+
+    with pytest.raises(ReadOnlyViolation):
+        client.session.post(
+            f"https://api.github.com/repos/{REPO}/issues/1/labels",
+            json={"labels": ["help wanted"]},
+        )
+
+    assert session.calls == []
+    assert client.write_request_count == 1
+
+
+def test_live_client_fetches_are_counted_as_reads_with_zero_writes():
+    session = FakeSession([[{"filename": "a.py"}], [{"state": "open"}]])
+    client = GitHubClient(token="token", session=session)
+
+    client.fetch_pull_request_files(REPO, 950)
+    client.fetch_open_blocking_dependency_count(REPO, 7)
+
+    assert client.read_request_count == 2
+    assert client.write_request_count == 0

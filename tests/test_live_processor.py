@@ -20,17 +20,23 @@ class FakeGitHubClient:
         files=None,
         error: Exception | None = None,
         dependency_counts=None,
+        file_answers=None,
     ):
         self.files = files or []
         self.error = error
         self.calls = []
         self.dependency_counts = list(dependency_counts or [0])
         self.dependency_calls = []
+        # Successive answers, so a test can make GitHub's reply drift between a
+        # first attempt and its retry.
+        self.file_answers = list(file_answers) if file_answers is not None else None
 
     def fetch_pull_request_files(self, repo: str, number: int):
         self.calls.append((repo, number))
         if self.error:
             raise self.error
+        if self.file_answers is not None:
+            return self.file_answers.pop(0)
         return self.files
 
     def fetch_open_blocking_dependency_count(self, repo: str, number: int):
@@ -253,6 +259,37 @@ def test_dependency_retry_reuses_the_observation_already_committed_to_state(tmp_
     assert state.items[f"{REPO}#issue-7"].blocking_dependency_count == 2
     logged = EventLog(tmp_path / "events.jsonl").read_all()
     assert logged[0].attachments["blocking_dependency_count"] == 2
+
+
+@pytest.mark.parametrize("action", ["opened", "synchronize"])
+def test_pull_file_retry_reuses_the_observation_already_committed_to_state(tmp_path, action):
+    """The same rule the dependency hydration follows, on the older PR-file path.
+
+    Both actions re-read the file list on a fresh delivery, so both could
+    overwrite a durable attachment whose observation is already in the state.
+    """
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    event = make_event(
+        "pull-crash",
+        "pull_request",
+        {"action": action, "pull_request": pull_payload(950)},
+        NOW,
+    )
+    inbox.enqueue(event, now=NOW)
+    github = FakeGitHubClient(file_answers=[["a.py"], ["a.py", "b.py"]])
+    log = FailOnceEventLog(tmp_path / "events.jsonl")
+    processor = _processor(tmp_path, inbox, github=github, log=log)
+
+    first = processor.process_one(now=NOW)
+    second = processor.process_one(now="2024-06-01T10:00:01Z")
+
+    assert first is not None and first.status == "retrying"
+    assert second is not None and second.status == "succeeded"
+    assert github.calls == [(REPO, 950)]
+    state = read_state(tmp_path / "live_state.json")
+    logged = EventLog(tmp_path / "events.jsonl").read_all()
+    assert state.items[f"{REPO}#pull-950"].files == ["a.py"]
+    assert logged[0].attachments["files"] == ["a.py"]
 
 
 def test_crash_after_state_write_recovers_without_duplicate_extraction_or_log(tmp_path):

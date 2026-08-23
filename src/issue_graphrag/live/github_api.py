@@ -6,6 +6,7 @@ from typing import Any
 
 import requests
 
+from issue_graphrag.http_boundary import CountingSession
 from issue_graphrag.ingest.github_loader import parse_repo
 from issue_graphrag.live.models import RepoEvent
 
@@ -44,7 +45,12 @@ def dependency_issue(event: RepoEvent) -> tuple[str, int] | None:
 
 
 class GitHubClient:
-    """Fetch deterministic fields omitted from GitHub webhook payloads."""
+    """Fetch deterministic fields omitted from GitHub webhook payloads.
+
+    Every request leaves through a read-only boundary. The worker runs
+    unattended against a live repository, so a write must fail here rather
+    than be discovered afterwards in a report.
+    """
 
     def __init__(
         self,
@@ -56,9 +62,18 @@ class GitHubClient:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         self.token = token
-        self.session = session or requests.Session()
+        self.session = CountingSession(session or requests.Session())
         self.timeout = timeout
         self.api_version = api_version
+
+    @property
+    def read_request_count(self) -> int:
+        return self.session.read_count
+
+    @property
+    def write_request_count(self) -> int:
+        """Non-GET requests attempted, whether or not they were blocked."""
+        return self.session.write_count
 
     def _headers(self) -> dict[str, str]:
         headers = {
