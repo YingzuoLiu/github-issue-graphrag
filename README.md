@@ -219,16 +219,16 @@ The Streamlit demo provides a small interface for selecting retrieval mode, runn
 | Evaluation | Offline BM25 / vector / RRF hybrid comparison harness with committed results |
 | Answers | Grounded generation with `--answer`, plus a Streamlit demo app |
 
-**Live contribution graph (v0.3)**
+**Live contribution graph (v0.3, productization on `0.4.0.dev0`)**
 
 | Area | What is implemented |
 |---|---|
-| Ingestion boundary | HTTP endpoint that verifies the exact raw body and allowlists one repository; a durable SQLite inbox with delivery-id dedup, leases, retries and dead letters; a separate worker, so GitHub is acknowledged after enqueue and never waits for an LLM |
+| Ingestion boundary | HTTP endpoint that verifies the exact raw body and allowlists one repository per process; repository-qualified SQLite inboxes with delivery-id dedup, leases, retries and dead letters; a separate worker, so GitHub is acknowledged after enqueue and never waits for an LLM |
 | Payload handling | Issue, pull request and comment ingestion including changed files, with paginated PR file hydration — including PRs first seen through a comment |
 | Time model | Immutable fact versions with `valid_from` / `valid_to`, so history stays queryable and historical projections never borrow later knowledge; source-clock record versioning, so stale, partial and out-of-order payloads all converge |
 | Correctness | An explicit ontology separating who may assert a predicate from whether the assertion is legal; a rebuild consistency check fingerprinting direction and provenance |
 | Cost control | Incremental indexing that re-extracts only the documents whose text changed |
-| Output | Deterministic contribution scoring with per-signal reasons and source links, deterministic fixture replay, and a Streamlit timeline of the affected subgraph |
+| Output | Deterministic contribution scoring with per-signal reasons and source links, deterministic fixture replay, a configured repository selector, freshness metadata and a Streamlit timeline of the affected subgraph |
 
 ## Setup
 
@@ -560,7 +560,10 @@ To run it against a real repository instead of the fixtures:
 
 ```bash
 python scripts/fetch_live_seed.py trustgraph-ai/trustgraph --state all --limit 30
-python scripts/replay_events.py   --seed data/raw/trustgraph-ai__trustgraph_live_seed.json   --events path/to/captured/events   --llm
+python scripts/replay_events.py \
+  --seed data/repos/trustgraph-ai__trustgraph/bootstrap_seed.json \
+  --events path/to/captured/events \
+  --llm
 ```
 
 `fetch_live_seed.py` keeps pull requests, comments and changed files, which
@@ -634,9 +637,11 @@ every change can be explained:
 
 ### Run the real webhook path
 
-Set one repository and a high-entropy secret in `.env`:
+Configure the repositories shown in the UI, plus the repository owned by this receiver/worker
+lane, and set a high-entropy secret in `.env`:
 
 ```dotenv
+GITHUB_REPOS=owner/name,other/repository
 GITHUB_WEBHOOK_REPO=owner/name
 GITHUB_WEBHOOK_SECRET=replace-me
 GITHUB_TOKEN=optional-token-for-private-repos-and-higher-rate-limits
@@ -649,9 +654,8 @@ state correctly knows only the issues and pull requests delivered after it start
 python scripts/fetch_live_seed.py owner/name --state all --limit 100
 mkdir -p data/empty-events
 python scripts/replay_events.py \
-  --seed data/raw/owner__name_live_seed.json \
-  --events data/empty-events \
-  --state data/processed/live_state.json
+  --seed data/repos/owner__name/bootstrap_seed.json \
+  --events data/empty-events
 ```
 
 Run the receiver and worker as separate processes:
@@ -681,6 +685,12 @@ python scripts/process_webhooks.py --retry-failed --once
 python scripts/process_webhooks.py --status
 ```
 
+Each repository has an independent inbox, state, event log, extraction-cache path and freshness
+record below `data/repos/<owner>__<name>/`. Bootstrap follows pagination for issues/PRs, comments
+and pull-request files with explicit CLI caps stored in the seed. See
+[`docs/repository-isolation.md`](docs/repository-isolation.md) for the layout, cap controls and
+freshness semantics. Start a separate receiver/worker pair with `--repo` for each active lane.
+
 For a delivery GitHub never successfully sent, use GitHub's delivery UI/API within its documented
 retention window. See GitHub's
 [webhook best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)
@@ -693,8 +703,8 @@ and [redelivery documentation](https://docs.github.com/en/webhooks/testing-and-t
   operator action.
 - The inbox gives at-least-once processing, not exactly-once model billing. A crash before the
   state commit can repeat an LLM request; a persistent extraction cache is the fix for that.
-- The local JSON state has one serialized worker and one configured repository. SQLite makes the
-  handoff durable, but it is not pretending to be a distributed queue.
+- Each repository-qualified local JSON state has one serialized worker. Separate repository lanes
+  are isolated, but this is not pretending to be a distributed queue or a cross-repository graph.
 - Storage is still local JSON. The fact model is designed so a graph database can replace the
   projection later, but swapping in Neo4j now would add operational weight without answering a
   new question.
@@ -944,6 +954,7 @@ src/issue_graphrag/
     inbox.py             # durable SQLite leases, retry and dead letters
     github_api.py        # paginated pull-request file hydration
     processor.py         # inbox -> atomic state + append-once audit log
+    repositories.py      # per-repository paths, registry and freshness metadata
     runtime.py           # shared deterministic/rules/LLM extractor setup
     events.py            # envelope normalization and the append-only event log
     records.py           # payload -> records, with source-clock versioning
@@ -1001,9 +1012,9 @@ Known limitations:
   repository would want the derivation narrowed to documents that mention the changed numbers.
 - Cross-document references only become edges for issues and pull requests the index has actually
   ingested. A mention of an un-ingested number is left out rather than creating a phantom node.
-- `fetch_live_seed.py` paginates the issue/PR list, but takes only the first 100 comments and the
-  first 100 changed files of any single item. The live worker path does paginate PR files fully,
-  so this bounds the bootstrap snapshot, not ongoing ingestion.
+- `fetch_live_seed.py` paginates the issue/PR list, comments and changed files, but intentionally
+  stops at the explicit item, per-item and page caps recorded in the seed. Raising those caps
+  increases completeness and API cost; ongoing webhook ingestion remains independently paginated.
 - `indexed_at` is a logical clock stored at one-second precision. A burst of N deliveries received
   in one second can therefore display an index time up to N-1 seconds ahead of `received_at`; order
   and history remain correct, and the clock converges again as wall time catches up. A production
@@ -1055,10 +1066,12 @@ This project demonstrates:
 
 - Batch GraphRAG index: MVP complete.
 - Live contribution graph: v0.3 vertical slice complete, with deterministic fixture replay and a
-  real signed webhook receiver backed by a durable local worker inbox; a three-repository
-  read-only pilot verifies sampled platform-fact integration and records its limits.
+  real signed webhook receiver backed by durable repository-qualified worker inboxes; a
+  three-repository read-only pilot verifies sampled platform-fact integration and records its
+  limits.
 - Productization development: `0.4.0.dev0`; M1 freezes a real Graphiti contribution contract and
-  adds timestamped, zero-write scheduled pilot monitoring without changing scoring semantics.
+  adds timestamped, zero-write scheduled pilot monitoring, while M2 isolates repository state,
+  completes bounded bootstrap pagination and exposes per-repository freshness.
 
 ## Future work
 

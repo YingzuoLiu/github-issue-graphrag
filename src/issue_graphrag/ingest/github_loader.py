@@ -77,11 +77,45 @@ def _get(url: str, token: str | None, params: dict[str, Any] | None = None) -> A
     return response.json()
 
 
+def _paginate(
+    url: str,
+    token: str | None,
+    *,
+    limit: int,
+    max_pages: int,
+    params: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch bounded GitHub list pages without silently dropping page two."""
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
+    if max_pages < 1:
+        raise ValueError("max_pages must be positive")
+    collected: list[dict[str, Any]] = []
+    for page in range(1, max_pages + 1):
+        remaining = limit - len(collected)
+        if remaining <= 0:
+            break
+        per_page = min(100, remaining)
+        payload = _get(
+            url,
+            token,
+            {**(params or {}), "per_page": per_page, "page": page},
+        )
+        if not isinstance(payload, list):
+            raise ValueError(f"GitHub returned a non-list payload for {url}")
+        rows = [row for row in payload if isinstance(row, dict)]
+        collected.extend(rows[:remaining])
+        if len(payload) < per_page:
+            break
+    return collected
+
+
 def fetch_issues_and_pulls(
     repo: str,
     token: str | None = None,
     state: str = "all",
     limit: int = 30,
+    max_pages: int = 10,
 ) -> list[dict[str, Any]]:
     """Fetch issues *and* pull requests.
 
@@ -92,25 +126,26 @@ def fetch_issues_and_pulls(
     owner, name = parse_repo(repo)
     url = f"https://api.github.com/repos/{owner}/{name}/issues"
 
-    collected: list[dict[str, Any]] = []
-    page = 1
-    while len(collected) < limit:
-        batch = _get(
-            url,
-            token,
-            {"state": state, "per_page": min(100, limit - len(collected)), "page": page},
-        )
-        if not batch:
-            break
-        collected.extend(batch)
-        page += 1
-    return collected[:limit]
+    return _paginate(
+        url,
+        token,
+        limit=limit,
+        max_pages=max_pages,
+        params={"state": state},
+    )
 
 
-def fetch_comments(repo: str, number: int, token: str | None = None) -> list[dict[str, Any]]:
+def fetch_comments(
+    repo: str,
+    number: int,
+    token: str | None = None,
+    *,
+    limit: int = 300,
+    max_pages: int = 10,
+) -> list[dict[str, Any]]:
     owner, name = parse_repo(repo)
     url = f"https://api.github.com/repos/{owner}/{name}/issues/{number}/comments"
-    return _get(url, token, {"per_page": 100})
+    return _paginate(url, token, limit=limit, max_pages=max_pages)
 
 
 def fetch_pull_request(repo: str, number: int, token: str | None = None) -> dict[str, Any]:
@@ -119,10 +154,18 @@ def fetch_pull_request(repo: str, number: int, token: str | None = None) -> dict
     return _get(f"https://api.github.com/repos/{owner}/{name}/pulls/{number}", token)
 
 
-def fetch_pull_request_files(repo: str, number: int, token: str | None = None) -> list[str]:
+def fetch_pull_request_files(
+    repo: str,
+    number: int,
+    token: str | None = None,
+    *,
+    limit: int = 3000,
+    max_pages: int = 30,
+) -> list[str]:
     owner, name = parse_repo(repo)
     url = f"https://api.github.com/repos/{owner}/{name}/pulls/{number}/files"
-    return [str(entry.get("filename")) for entry in _get(url, token, {"per_page": 100})]
+    rows = _paginate(url, token, limit=limit, max_pages=max_pages)
+    return sorted({str(entry["filename"]) for entry in rows if entry.get("filename")})
 
 
 def to_seed_item(
@@ -182,18 +225,49 @@ def build_live_seed(
     limit: int = 30,
     with_comments: bool = True,
     with_files: bool = True,
+    item_max_pages: int = 10,
+    comment_limit_per_item: int = 300,
+    comment_max_pages: int = 10,
+    file_limit_per_pull: int = 3000,
+    file_max_pages: int = 30,
 ) -> dict[str, Any]:
     """Build a live-index snapshot: issues, pull requests, comments and files."""
     items: list[dict[str, Any]] = []
 
-    for raw in fetch_issues_and_pulls(repo, token=token, state=state, limit=limit):
+    for raw in fetch_issues_and_pulls(
+        repo,
+        token=token,
+        state=state,
+        limit=limit,
+        max_pages=item_max_pages,
+    ):
         number = raw["number"]
         is_pull = "pull_request" in raw
-        comments = fetch_comments(repo, number, token) if with_comments else []
+        comments = (
+            fetch_comments(
+                repo,
+                number,
+                token,
+                limit=comment_limit_per_item,
+                max_pages=comment_max_pages,
+            )
+            if with_comments
+            else []
+        )
 
         if is_pull:
             detail = fetch_pull_request(repo, number, token)
-            files = fetch_pull_request_files(repo, number, token) if with_files else []
+            files = (
+                fetch_pull_request_files(
+                    repo,
+                    number,
+                    token,
+                    limit=file_limit_per_pull,
+                    max_pages=file_max_pages,
+                )
+                if with_files
+                else []
+            )
             items.append(to_seed_item(repo, {**raw, **detail}, "pull_request", comments, files))
         else:
             items.append(to_seed_item(repo, raw, "issue", comments, []))

@@ -11,6 +11,7 @@ from issue_graphrag.live.events import EventLog
 from issue_graphrag.live.github_api import GitHubClient
 from issue_graphrag.live.inbox import DeliveryInbox
 from issue_graphrag.live.processor import DeliveryProcessor, ProcessingResult, run_worker_loop
+from issue_graphrag.live.repositories import RepoRegistry, repo_paths
 from issue_graphrag.live.runtime import configured_extractor
 from issue_graphrag.live.timeutil import now_utc, to_iso
 
@@ -66,9 +67,17 @@ def main() -> None:
     if args.max_attempts <= 0:
         parser.error("--max-attempts must be positive")
 
-    inbox_path = args.inbox or settings.processed_data_dir / "webhook_inbox.sqlite"
-    state_path = args.state or settings.processed_data_dir / "live_state.json"
-    log_path = args.event_log or settings.processed_data_dir / "event_log.jsonl"
+    repo = args.repo or settings.github_webhook_repo
+    if not repo:
+        parser.error("--repo or GITHUB_WEBHOOK_REPO is required")
+    registry = RepoRegistry(settings.repo_data_dir, settings.github_repos)
+    repo_storage = (
+        repo_paths(settings.repo_data_dir, repo) if args.status else registry.register(repo)
+    )
+    repo = repo_storage.repo
+    inbox_path = args.inbox or repo_storage.inbox
+    state_path = args.state or repo_storage.state
+    log_path = args.event_log or repo_storage.event_log
     inbox = DeliveryInbox(inbox_path)
 
     if args.status:
@@ -80,10 +89,6 @@ def main() -> None:
                 f"{delivery.last_error or '(no error recorded)'}"
             )
         return
-
-    repo = args.repo or settings.github_webhook_repo
-    if not repo:
-        parser.error("--repo or GITHUB_WEBHOOK_REPO is required")
 
     if args.retry_failed:
         count = inbox.retry_failed(to_iso(now_utc()))
@@ -99,6 +104,7 @@ def main() -> None:
         lease_seconds=args.lease_seconds,
         retry_delay_seconds=args.retry_delay_seconds,
         max_attempts=args.max_attempts,
+        freshness_path=repo_storage.freshness,
     )
 
     if args.once:

@@ -21,6 +21,7 @@ env/
 # Generated data and indexes
 data/raw/*
 data/processed/*
+data/repos/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 *.sqlite

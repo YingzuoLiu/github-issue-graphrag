@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
 from issue_graphrag.config import load_settings
@@ -8,6 +10,7 @@ from issue_graphrag.live.events import EventLog
 from issue_graphrag.live.history import timeline
 from issue_graphrag.live.ontology import describe
 from issue_graphrag.live.projection import event_subgraph, project_graph
+from issue_graphrag.live.repositories import RepoRegistry, read_freshness
 from issue_graphrag.live.store import read_state
 from issue_graphrag.live.viz import legend_markdown, subgraph_dot
 from issue_graphrag.llm.client import MockLLMClient, OpenAICompatibleClient
@@ -54,19 +57,27 @@ def load_processed_data():
 
 
 @st.cache_data(show_spinner=False)
-def load_live_index(state_mtime: float, log_mtime: float):
+def load_live_index(
+    state_path_text: str,
+    log_path_text: str,
+    state_mtime: float,
+    log_mtime: float,
+):
     """Load the live index. Cache keys are file mtimes so a replay invalidates it."""
-    settings = load_settings()
-    state = read_state(settings.processed_data_dir / "live_state.json")
-    events = EventLog(settings.processed_data_dir / "event_log.jsonl").read_all()
+    state = read_state(Path(state_path_text))
+    events = EventLog(Path(log_path_text)).read_all()
     return state, events
 
 
-def live_index_paths():
+def live_index_paths(repo: str | None = None):
     settings = load_settings()
+    if repo is not None:
+        paths = RepoRegistry(settings.repo_data_dir, settings.github_repos).paths(repo)
+        return paths.state, paths.event_log, paths.freshness
     return (
         settings.processed_data_dir / "live_state.json",
         settings.processed_data_dir / "event_log.jsonl",
+        None,
     )
 
 
@@ -268,7 +279,13 @@ def render_evidence(graph, delta) -> None:
 
 
 def render_live_tab() -> None:
-    state_path, log_path = live_index_paths()
+    settings = load_settings()
+    registry = RepoRegistry(settings.repo_data_dir, settings.github_repos)
+    repos = registry.repositories()
+    selected_repo = (
+        st.selectbox("Repository", repos, key="live_repository") if repos else None
+    )
+    state_path, log_path, freshness_path = live_index_paths(selected_repo)
     if not state_path.exists():
         st.warning(
             "No live index yet. Build one with:\n\n"
@@ -277,9 +294,19 @@ def render_live_tab() -> None:
         return
 
     state, events = load_live_index(
+        str(state_path),
+        str(log_path),
         state_path.stat().st_mtime,
         log_path.stat().st_mtime if log_path.exists() else 0.0,
     )
+    if freshness_path is not None:
+        freshness = read_freshness(freshness_path, state.repo)
+        st.caption(
+            "Freshness — source sync: "
+            f"`{freshness.last_source_sync_at or 'not recorded'}`; state commit: "
+            f"`{freshness.last_state_commit_at or 'not recorded'}`; semantic: "
+            f"`{freshness.semantic_status}`."
+        )
     views = timeline(state, events)
     current = project_graph(state)
 
