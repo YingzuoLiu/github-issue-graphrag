@@ -31,6 +31,7 @@ def _issue(
     labels: list[str] | None = None,
     assignees: list[str] | None = None,
     locked: bool = False,
+    blocking_dependencies: int = 0,
 ) -> dict[str, Any]:
     return {
         "number": number,
@@ -41,9 +42,9 @@ def _issue(
         "assignees": [{"login": login} for login in assignees or []],
         "locked": locked,
         "issue_dependencies_summary": {
-            "blocked_by": 0,
+            "blocked_by": blocking_dependencies,
             "blocking": 0,
-            "total_blocked_by": 0,
+            "total_blocked_by": blocking_dependencies,
             "total_blocking": 0,
         },
         "user": {"login": "author"},
@@ -243,6 +244,31 @@ def test_pilot_models_assignees_while_separating_ambiguous_pr_references():
     assert result["ambiguous_claim_examples"][0]["number"] == 5
     assert result["engineering_checks"]["constraint_contradiction_rate_pass"]
     assert result["engineering_checks"]["github_write_requests_are_zero"]
+
+
+def test_pilot_and_live_product_share_lock_and_native_dependency_semantics():
+    snapshot = make_snapshot(
+        REPO,
+        [
+            _issue(1, locked=True),
+            _issue(2, blocking_dependencies=2),
+        ],
+        [],
+        fetched_at=NOW,
+        request_count=1,
+    )
+
+    result = evaluate_snapshot(snapshot)
+
+    assert result["system_status_counts"] == {
+        "available": 0,
+        "claimed": 0,
+        "blocked": 2,
+    }
+    assert result["platform_constraints"]["locked"] == 1
+    assert result["platform_constraints"]["blocked_by_dependency"] == 1
+    assert result["metrics"]["platform_constraint_contradiction_count"] == 0
+    assert result["metrics"]["causal_evidence_url_coverage"] == 1.0
 
 
 def test_pilot_markdown_states_what_the_dry_run_does_not_prove():

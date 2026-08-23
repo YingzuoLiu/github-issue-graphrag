@@ -16,11 +16,14 @@ def graph_with(
     pr_relation="closes",
     blocker_state=None,
     assignees=(),
+    locked=False,
+    blocking_dependency_count=0,
 ) -> nx.Graph:
     graph = nx.Graph()
     graph.add_node(
         "Issue #1", type="ISSUE", state=issue_state, labels=list(labels),
         description="An issue", url="https://example.test/1", number=1,
+        locked=locked, blocking_dependency_count=blocking_dependency_count,
     )
 
     for index in range(concepts):
@@ -162,6 +165,22 @@ def test_an_open_blocker_penalises_and_a_closed_one_does_not():
     assert blocked.blocked_by == ["Issue #3"]
     assert unblocked.status == "available"
     assert unblocked.score > blocked.score
+
+
+def test_locked_and_native_dependency_signals_block_an_issue_once():
+    item = score_issue(
+        graph_with(locked=True, blocking_dependency_count=2),
+        "Issue #1",
+    )
+
+    assert item.status == "blocked"
+    assert item.score == 0.0
+    assert item.locked is True
+    assert item.blocking_dependency_count == 2
+    assert sum("(-1.50)" in reason for reason in item.reasons) == 1
+    assert any("conversation is locked" in reason for reason in item.reasons)
+    assert any("2 blocking dependencies" in reason for reason in item.reasons)
+    assert all(evidence.url == "https://example.test/1" for evidence in item.evidence)
 
 
 def test_closed_issues_score_zero_and_drop_out_of_the_ranking():

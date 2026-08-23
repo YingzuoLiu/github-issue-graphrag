@@ -14,7 +14,13 @@ FactOrigin = Literal["github", "llm"]
 FactKey = tuple[str, str, str, str, str, str]
 
 #: Node-level predicates. Everything else is projected as a graph edge.
-ENTITY_PREDICATES = ("is_a", "has_state", "has_label")
+ENTITY_PREDICATES = (
+    "is_a",
+    "has_state",
+    "has_label",
+    "is_locked",
+    "has_blocking_dependencies",
+)
 
 #: Relations GitHub states explicitly. These are never produced by the LLM.
 GITHUB_RELATIONS = (
@@ -132,6 +138,8 @@ VERSIONED_ITEM_FIELDS = (
     "merged_at",
     "labels",
     "assignees",
+    "locked",
+    "blocking_dependency_count",
     "author",
     "url",
     "created_at",
@@ -154,6 +162,8 @@ class RepoItem(BaseModel):
     draft: bool = False
     labels: list[str] = Field(default_factory=list)
     assignees: list[str] = Field(default_factory=list)
+    locked: bool = False
+    blocking_dependency_count: int = Field(default=0, ge=0)
     author: str = ""
     url: str | None = None
     created_at: str | None = None
@@ -332,6 +342,8 @@ class Opportunity(BaseModel):
     claimed_by: list[str] = Field(default_factory=list)
     assignees: list[str] = Field(default_factory=list)
     blocked_by: list[str] = Field(default_factory=list)
+    locked: bool = False
+    blocking_dependency_count: int = 0
     reasons: list[str] = Field(default_factory=list)
     evidence: list[OpportunityEvidence] = Field(default_factory=list)
 

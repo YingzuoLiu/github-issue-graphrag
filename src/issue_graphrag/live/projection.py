@@ -97,6 +97,8 @@ def project_graph(
                 description="",
                 state=None,
                 labels=[],
+                locked=False,
+                blocking_dependency_count=0,
                 url=None,
                 number=int(match.group(1)) if match else None,
                 source_ids=[],
@@ -132,6 +134,10 @@ def project_graph(
             node["state"] = fact.object
         elif fact.predicate == "has_label":
             node["labels"] = sorted(set(node["labels"]) | {fact.object})
+        elif fact.predicate == "is_locked":
+            node["locked"] = fact.object.casefold() == "true"
+        elif fact.predicate == "has_blocking_dependencies":
+            node["blocking_dependency_count"] = max(int(fact.object), 0)
 
     for fact in relation_facts:
         subject = rename.get(fact.subject, fact.subject)
@@ -226,6 +232,8 @@ def graph_signature(graph: nx.Graph) -> dict[str, list]:
             str(data.get("type", "")),
             str(data.get("state") or ""),
             tuple(sorted(data.get("labels", []))),
+            bool(data.get("locked", False)),
+            int(data.get("blocking_dependency_count", 0)),
             str(data.get("description", "")),
             str(data.get("url") or ""),
             tuple(sorted(data.get("origins", []))),
@@ -274,9 +282,16 @@ def diff_graphs(before: nx.Graph, after: nx.Graph) -> dict[str, list]:
     changed: list[str] = []
     for name in sorted(before_nodes & after_nodes):
         old, new = before.nodes[name], after.nodes[name]
-        if (old.get("state"), sorted(old.get("labels", []))) != (
+        if (
+            old.get("state"),
+            sorted(old.get("labels", [])),
+            bool(old.get("locked", False)),
+            int(old.get("blocking_dependency_count", 0)),
+        ) != (
             new.get("state"),
             sorted(new.get("labels", [])),
+            bool(new.get("locked", False)),
+            int(new.get("blocking_dependency_count", 0)),
         ):
             changed.append(str(name))
 

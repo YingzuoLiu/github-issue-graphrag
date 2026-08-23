@@ -57,6 +57,8 @@ def print_explain(state: LiveState, node: str, moment: str | None) -> None:
     print(f"  type        : {data.get('type')}")
     print(f"  state       : {data.get('state')}")
     print(f"  labels      : {', '.join(data.get('labels', [])) or '(none)'}")
+    print(f"  locked      : {bool(data.get('locked', False))}")
+    print(f"  dependencies: {int(data.get('blocking_dependency_count', 0))} blocking")
     print(f"  url         : {data.get('url') or '(none)'}")
     print(f"  first seen  : {data.get('first_seen')}")
     print(f"  description : {data.get('description') or '(none)'}")
