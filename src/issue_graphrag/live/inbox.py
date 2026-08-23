@@ -15,7 +15,9 @@ from issue_graphrag.live.models import RepoEvent
 from issue_graphrag.live.timeutil import parse_iso, to_iso
 
 DeliveryStatus = Literal["pending", "processing", "succeeded", "failed"]
+SemanticJobStatus = Literal["pending", "processing", "deferred"]
 EnqueueOutcome = Literal["enqueued", "duplicate", "requeued"]
+SemanticEnqueueOutcome = Literal["enqueued", "existing", "replaced"]
 
 
 class DeliveryConflict(ValueError):
@@ -43,6 +45,23 @@ class InboxDelivery:
     lease_id: str | None
     next_attempt_at: str
     completed_at: str | None
+    last_error: str | None
+
+
+@dataclass(frozen=True)
+class SemanticJob:
+    document_id: str
+    content_signature: str
+    trigger_delivery_id: str
+    status: SemanticJobStatus
+    next_unit_index: int
+    total_units: int
+    attempts: int
+    enqueued_at: str
+    updated_at: str
+    claimed_at: str | None
+    lease_id: str | None
+    next_attempt_at: str
     last_error: str | None
 
 
@@ -108,6 +127,25 @@ class DeliveryInbox:
                 );
                 CREATE INDEX IF NOT EXISTS deliveries_ready
                     ON deliveries(status, next_attempt_at, enqueued_at, delivery_id);
+                CREATE TABLE IF NOT EXISTS semantic_jobs (
+                    document_id TEXT PRIMARY KEY,
+                    content_signature TEXT NOT NULL,
+                    trigger_delivery_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (
+                        status IN ('pending', 'processing', 'deferred')
+                    ),
+                    next_unit_index INTEGER NOT NULL DEFAULT 0 CHECK (next_unit_index >= 0),
+                    total_units INTEGER NOT NULL CHECK (total_units >= 0),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    enqueued_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    lease_id TEXT,
+                    next_attempt_at TEXT NOT NULL,
+                    last_error TEXT
+                );
+                CREATE INDEX IF NOT EXISTS semantic_jobs_ready
+                    ON semantic_jobs(status, next_attempt_at, updated_at, document_id);
                 """
             )
             columns = {
@@ -130,6 +168,26 @@ class DeliveryInbox:
             lease_id=row["lease_id"],
             next_attempt_at=row["next_attempt_at"],
             completed_at=row["completed_at"],
+            last_error=row["last_error"],
+        )
+
+    @staticmethod
+    def _semantic_record(row: sqlite3.Row | None) -> SemanticJob | None:
+        if row is None:
+            return None
+        return SemanticJob(
+            document_id=row["document_id"],
+            content_signature=row["content_signature"],
+            trigger_delivery_id=row["trigger_delivery_id"],
+            status=row["status"],
+            next_unit_index=int(row["next_unit_index"]),
+            total_units=int(row["total_units"]),
+            attempts=int(row["attempts"]),
+            enqueued_at=row["enqueued_at"],
+            updated_at=row["updated_at"],
+            claimed_at=row["claimed_at"],
+            lease_id=row["lease_id"],
+            next_attempt_at=row["next_attempt_at"],
             last_error=row["last_error"],
         )
 
@@ -261,6 +319,10 @@ class DeliveryInbox:
                 "SELECT 1 FROM deliveries WHERE status = 'processing' LIMIT 1"
             ).fetchone():
                 return None
+            if connection.execute(
+                "SELECT 1 FROM semantic_jobs WHERE status = 'processing' LIMIT 1"
+            ).fetchone():
+                return None
 
             row = connection.execute(
                 """
@@ -390,6 +452,243 @@ class DeliveryInbox:
                 ),
             )
         return "failed" if terminal else "retrying"
+
+    def upsert_semantic_job(
+        self,
+        *,
+        document_id: str,
+        content_signature: str,
+        trigger_delivery_id: str,
+        total_units: int,
+        now: str,
+    ) -> SemanticEnqueueOutcome:
+        """Make one document/content version durably eligible for enrichment."""
+        if total_units < 0:
+            raise ValueError("total_units must be non-negative")
+        moment = to_iso(now)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT content_signature, status FROM semantic_jobs WHERE document_id = ?",
+                (document_id,),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO semantic_jobs (
+                        document_id, content_signature, trigger_delivery_id, status,
+                        next_unit_index, total_units, attempts, enqueued_at, updated_at,
+                        next_attempt_at
+                    ) VALUES (?, ?, ?, 'pending', 0, ?, 0, ?, ?, ?)
+                    """,
+                    (
+                        document_id,
+                        content_signature,
+                        trigger_delivery_id,
+                        total_units,
+                        moment,
+                        moment,
+                        moment,
+                    ),
+                )
+                return "enqueued"
+
+            if existing["content_signature"] == content_signature:
+                connection.execute(
+                    """
+                    UPDATE semantic_jobs
+                    SET total_units = ?, updated_at = ?
+                    WHERE document_id = ?
+                    """,
+                    (total_units, moment, document_id),
+                )
+                return "existing"
+
+            if existing["status"] == "processing":
+                raise LeaseLostError(
+                    f"cannot replace active semantic work for {document_id!r}"
+                )
+            connection.execute(
+                """
+                UPDATE semantic_jobs
+                SET content_signature = ?, trigger_delivery_id = ?, status = 'pending',
+                    next_unit_index = 0, total_units = ?, attempts = 0,
+                    enqueued_at = ?, updated_at = ?, claimed_at = NULL, lease_id = NULL,
+                    next_attempt_at = ?, last_error = NULL
+                WHERE document_id = ?
+                """,
+                (
+                    content_signature,
+                    trigger_delivery_id,
+                    total_units,
+                    moment,
+                    moment,
+                    moment,
+                    document_id,
+                ),
+            )
+        return "replaced"
+
+    def get_semantic_job(self, document_id: str) -> SemanticJob | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM semantic_jobs WHERE document_id = ?",
+                (document_id,),
+            ).fetchone()
+        return self._semantic_record(row)
+
+    def list_semantic_jobs(self, limit: int = 20) -> list[SemanticJob]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM semantic_jobs
+                ORDER BY updated_at, document_id
+                LIMIT ?
+                """,
+                (max(0, limit),),
+            ).fetchall()
+        return [record for row in rows if (record := self._semantic_record(row))]
+
+    def count_semantic_jobs(self) -> int:
+        with self._connect() as connection:
+            return int(connection.execute("SELECT COUNT(*) FROM semantic_jobs").fetchone()[0])
+
+    def claim_semantic_job(self, now: str, lease_seconds: int) -> SemanticJob | None:
+        """Claim one deferred document without racing the source-delivery lane."""
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        moment = to_iso(now)
+        stale_before = to_iso(parse_iso(moment) - timedelta(seconds=lease_seconds))
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                UPDATE semantic_jobs
+                SET status = 'deferred', updated_at = ?, claimed_at = NULL,
+                    lease_id = NULL, next_attempt_at = ?,
+                    last_error = COALESCE(last_error, 'semantic lease expired')
+                WHERE status = 'processing' AND claimed_at <= ?
+                """,
+                (moment, moment, stale_before),
+            )
+
+            if connection.execute(
+                "SELECT 1 FROM deliveries WHERE status = 'processing' LIMIT 1"
+            ).fetchone():
+                return None
+            if connection.execute(
+                "SELECT 1 FROM semantic_jobs WHERE status = 'processing' LIMIT 1"
+            ).fetchone():
+                return None
+            # Source observations always outrank enrichment. Do not start a
+            # model call while a ready GitHub delivery is waiting for the lane.
+            if connection.execute(
+                """
+                SELECT 1 FROM deliveries
+                WHERE status = 'pending' AND next_attempt_at <= ?
+                LIMIT 1
+                """,
+                (moment,),
+            ).fetchone():
+                return None
+
+            row = connection.execute(
+                """
+                SELECT document_id FROM semantic_jobs
+                WHERE status IN ('pending', 'deferred') AND next_attempt_at <= ?
+                ORDER BY attempts, updated_at, document_id
+                LIMIT 1
+                """,
+                (moment,),
+            ).fetchone()
+            if row is None:
+                return None
+            lease_id = uuid.uuid4().hex
+            connection.execute(
+                """
+                UPDATE semantic_jobs
+                SET status = 'processing', attempts = attempts + 1,
+                    claimed_at = ?, lease_id = ?, updated_at = ?
+                WHERE document_id = ?
+                """,
+                (moment, lease_id, moment, row["document_id"]),
+            )
+            claimed = connection.execute(
+                "SELECT * FROM semantic_jobs WHERE document_id = ?",
+                (row["document_id"],),
+            ).fetchone()
+        return self._semantic_record(claimed)
+
+    def renew_semantic_lease(self, document_id: str, lease_id: str, now: str) -> None:
+        moment = to_iso(now)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE semantic_jobs SET claimed_at = ?, updated_at = ?
+                WHERE document_id = ? AND status = 'processing' AND lease_id = ?
+                """,
+                (moment, moment, document_id, lease_id),
+            )
+            if cursor.rowcount != 1:
+                raise LeaseLostError(f"semantic lease lost for {document_id!r}")
+
+    def advance_semantic_job(
+        self,
+        document_id: str,
+        lease_id: str,
+        next_unit_index: int,
+        now: str,
+    ) -> None:
+        if next_unit_index < 0:
+            raise ValueError("next_unit_index must be non-negative")
+        moment = to_iso(now)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE semantic_jobs SET next_unit_index = ?, updated_at = ?
+                WHERE document_id = ? AND status = 'processing' AND lease_id = ?
+                """,
+                (next_unit_index, moment, document_id, lease_id),
+            )
+            if cursor.rowcount != 1:
+                raise LeaseLostError(f"semantic lease lost for {document_id!r}")
+
+    def defer_semantic_job(
+        self,
+        document_id: str,
+        lease_id: str,
+        error: str,
+        now: str,
+        retry_delay_seconds: int,
+    ) -> None:
+        if retry_delay_seconds < 0:
+            raise ValueError("retry_delay_seconds must be non-negative")
+        moment = to_iso(now)
+        retry_at = to_iso(parse_iso(moment) + timedelta(seconds=retry_delay_seconds))
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE semantic_jobs
+                SET status = 'deferred', updated_at = ?, claimed_at = NULL,
+                    lease_id = NULL, next_attempt_at = ?, last_error = ?
+                WHERE document_id = ? AND status = 'processing' AND lease_id = ?
+                """,
+                (moment, retry_at, error[:4000], document_id, lease_id),
+            )
+            if cursor.rowcount != 1:
+                raise LeaseLostError(f"semantic lease lost for {document_id!r}")
+
+    def complete_semantic_job(self, document_id: str, lease_id: str) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM semantic_jobs
+                WHERE document_id = ? AND status = 'processing' AND lease_id = ?
+                """,
+                (document_id, lease_id),
+            )
+            if cursor.rowcount != 1:
+                raise LeaseLostError(f"semantic lease lost for {document_id!r}")
 
     def retry_failed(self, now: str) -> int:
         """Manually move all dead letters back to pending with fresh attempts."""

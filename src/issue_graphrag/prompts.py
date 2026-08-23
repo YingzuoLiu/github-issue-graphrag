@@ -1,3 +1,10 @@
+import hashlib
+
+
+EXTRACTION_PROMPT_VERSION = "extraction/2026-08-24"
+EXTRACTION_SCHEMA_VERSION = "1"
+
+
 ENTITY_EXTRACTION_PROMPT = """
 You are building a lightweight knowledge graph from GitHub issues, pull requests, and repository documents.
 
@@ -26,6 +33,22 @@ Return strict JSON with this shape:
 Input text:
 {text}
 """.strip()
+
+# Changing extraction instructions is a model-behaviour change. Keep the
+# human-readable version and the exact bytes independently pinned so an edit
+# cannot silently reuse the old cache namespace.
+ENTITY_EXTRACTION_PROMPT_SHA256 = (
+    "b45d42dbf80a4d4ec930916d2b9d3324346be0fe987fa72c0f4abe304dcd1ac2"
+)
+
+
+def assert_extraction_prompt_identity() -> None:
+    actual = hashlib.sha256(ENTITY_EXTRACTION_PROMPT.encode("utf-8")).hexdigest()
+    if actual != ENTITY_EXTRACTION_PROMPT_SHA256:
+        raise RuntimeError(
+            "ENTITY_EXTRACTION_PROMPT changed without a prompt identity update: "
+            f"expected {ENTITY_EXTRACTION_PROMPT_SHA256}, got {actual}"
+        )
 
 
 COMMUNITY_REPORT_PROMPT = """

@@ -111,12 +111,16 @@ def test_one_repository_failure_does_not_block_another_repository_lane(tmp_path)
 
     failed = _processor(failed_paths, FailingExtractor()).process_one(now=NOW)
     healthy = _processor(healthy_paths, NullExtractor()).process_one(now=NOW)
+    deferred = _processor(failed_paths, FailingExtractor()).process_one(now=NOW)
 
-    assert failed is not None and failed.status == "failed"
+    assert failed is not None and failed.status == "succeeded"
     assert healthy is not None and healthy.status == "succeeded"
-    assert not failed_paths.state.exists()
+    assert deferred is not None and deferred.status == "deferred"
+    assert deferred.work_type == "semantic"
+    assert read_state(failed_paths.state).has_delivery("failed-1")
     assert read_state(healthy_paths.state).repo == "beta/two"
     assert read_freshness(failed_paths.freshness, failed_paths.repo).semantic_status == "degraded"
     assert read_freshness(healthy_paths.freshness, healthy_paths.repo).semantic_status == "pending"
-    assert failed_inbox.count("failed") == 1
+    assert failed_inbox.count("succeeded") == 1
+    assert failed_inbox.count_semantic_jobs() == 1
     assert healthy_inbox.count("succeeded") == 1

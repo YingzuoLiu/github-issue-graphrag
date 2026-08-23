@@ -20,7 +20,11 @@ from __future__ import annotations
 
 from issue_graphrag.live.contribution import diff_opportunities, opportunities
 from issue_graphrag.live.documents import text_units_for
-from issue_graphrag.live.extraction import Extractor, llm_facts_for_item
+from issue_graphrag.live.extraction import (
+    Extractor,
+    llm_facts_for_item,
+    llm_facts_from_result,
+)
 from issue_graphrag.live.facts import ItemIndex, github_facts_for_item
 from issue_graphrag.live.models import (
     Fact,
@@ -36,6 +40,7 @@ from issue_graphrag.live.projection import diff_graphs, project_graph
 from issue_graphrag.live.records import UnsupportedEvent, apply_event_to_records
 from issue_graphrag.live.store import reconcile_facts
 from issue_graphrag.live.timeutil import is_after, max_iso, next_iso, to_iso
+from issue_graphrag.models import ExtractionResult
 
 SEED_DELIVERY = "seed"
 REBUILD_DELIVERY = "rebuild"
@@ -127,9 +132,15 @@ def refresh_inferred(
     extractor: Extractor | RecordedExtractor,
     moment: str,
     delivery_id: str,
+    document_ids: list[str] | None = None,
 ) -> tuple[list[FactChange], list[RejectedFact], list[str]]:
     """Run scoped extraction and let the ontology decide what may be stored."""
-    stale = pending_extraction_documents(state)
+    pending = set(pending_extraction_documents(state))
+    stale = (
+        sorted(pending)
+        if document_ids is None
+        else sorted(document_id for document_id in set(document_ids) if document_id in pending)
+    )
     if not stale:
         return [], [], []
 
@@ -166,6 +177,28 @@ def refresh_inferred(
     return changes, rejected, stale
 
 
+def publish_inferred_result(
+    state: LiveState,
+    document_id: str,
+    result: ExtractionResult,
+    moment: str,
+    delivery_id: str,
+) -> tuple[list[FactChange], list[RejectedFact]]:
+    """Atomically reconcile one fully cached document extraction into ``state``."""
+    item = state.items[document_id]
+    candidates = llm_facts_from_result(
+        item,
+        text_units_for(item),
+        result,
+        moment,
+        delivery_id,
+    )
+    kept, refused = validate_inferred(candidates)
+    changes = reconcile_facts(state, document_id, "llm", kept, moment, delivery_id)
+    state.extraction_signatures[document_id] = item.extraction_signature()
+    return changes, [RejectedFact(fact=fact, reason=reason) for fact, reason in refused]
+
+
 def _refresh(
     state: LiveState,
     extractor: Extractor | RecordedExtractor,
@@ -194,8 +227,13 @@ def bootstrap(
     return state
 
 
-def apply_event(state: LiveState, event: RepoEvent, extractor: Extractor) -> GraphDelta:
-    """Apply one delivery and report exactly what it changed."""
+def _apply_event(
+    state: LiveState,
+    event: RepoEvent,
+    extractor: Extractor,
+    *,
+    include_inferred: bool,
+) -> GraphDelta:
     if state.has_delivery(event.delivery_id):
         # A worker may have committed state and crashed before appending the
         # audit log. Its inbox copy already carries the original index clock;
@@ -241,7 +279,17 @@ def apply_event(state: LiveState, event: RepoEvent, extractor: Extractor) -> Gra
         delta.skip_reason = str(exc)
         return delta
 
-    changes, rejected, reextracted = _refresh(state, extractor, moment, event.delivery_id)
+    changes = refresh_deterministic(state, moment, event.delivery_id)
+    rejected: list[RejectedFact] = []
+    reextracted: list[str] = []
+    if include_inferred:
+        inferred, rejected, reextracted = refresh_inferred(
+            state,
+            extractor,
+            moment,
+            event.delivery_id,
+        )
+        changes.extend(inferred)
 
     after_graph = project_graph(state)
     graph_diff = diff_graphs(before_graph, after_graph)
@@ -262,6 +310,25 @@ def apply_event(state: LiveState, event: RepoEvent, extractor: Extractor) -> Gra
         before_opportunities, opportunities(after_graph)
     )
     return delta
+
+
+def apply_event_deterministic(state: LiveState, event: RepoEvent) -> GraphDelta:
+    """Commit one source delivery without running semantic enrichment.
+
+    The durable worker uses this phase first. Once its state and audit event are
+    written, a provider/cache/quota failure can only defer semantic work; it can
+    no longer turn a successfully observed GitHub delivery into a failed one.
+    """
+    return _apply_event(state, event, NullExtractor(), include_inferred=False)
+
+
+def apply_event(state: LiveState, event: RepoEvent, extractor: Extractor) -> GraphDelta:
+    """Apply one delivery synchronously, including extraction when configured.
+
+    Offline replay keeps this compact path. The durable live worker deliberately
+    uses :func:`apply_event_deterministic` and a separately leased semantic job.
+    """
+    return _apply_event(state, event, extractor, include_inferred=True)
 
 
 def replay(state: LiveState, events: list[RepoEvent], extractor: Extractor) -> list[GraphDelta]:

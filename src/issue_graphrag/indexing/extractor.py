@@ -10,15 +10,53 @@ from issue_graphrag.models import Entity, ExtractionResult, Relationship, TextUn
 from issue_graphrag.prompts import ENTITY_EXTRACTION_PROMPT
 
 
+EXTRACTION_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string"},
+                    "type": {"type": "string"},
+                    "description": {"type": "string"},
+                },
+                "required": ["name", "type", "description"],
+            },
+        },
+        "relationships": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "source": {"type": "string"},
+                    "target": {"type": "string"},
+                    "relation": {"type": "string"},
+                    "description": {"type": "string"},
+                    "weight": {"type": "number"},
+                },
+                "required": ["source", "target", "relation", "description", "weight"],
+            },
+        },
+    },
+    "required": ["entities", "relationships"],
+}
+
+
 def _normalize_name(name: str) -> str:
     return " ".join(name.strip().split())
 
 
-def extract_from_text_unit(text_unit: TextUnit, llm: LLMClient) -> ExtractionResult:
-    """Extract entities and relationships from a TextUnit using an LLM."""
-    prompt = ENTITY_EXTRACTION_PROMPT.replace("{text}", text_unit.text)
-    raw = llm.complete(prompt)
+def extraction_prompt(text_unit: TextUnit) -> str:
+    return ENTITY_EXTRACTION_PROMPT.replace("{text}", text_unit.text)
 
+
+def parse_extraction_result(raw: str, text_unit: TextUnit) -> ExtractionResult:
+    """Validate and attach the immutable TextUnit provenance to model output."""
     try:
         parsed = extract_json_object(raw)
         result = ExtractionResult.model_validate(parsed)
@@ -42,6 +80,13 @@ def extract_from_text_unit(text_unit: TextUnit, llm: LLMClient) -> ExtractionRes
             relationships.append(rel)
 
     return ExtractionResult(entities=entities, relationships=relationships)
+
+
+def extract_from_text_unit(text_unit: TextUnit, llm: LLMClient) -> ExtractionResult:
+    """Extract entities and relationships from a TextUnit using an LLM."""
+    prompt = extraction_prompt(text_unit)
+    raw = llm.complete(prompt)
+    return parse_extraction_result(raw, text_unit)
 
 
 def extract_all(text_units: list[TextUnit], llm: LLMClient) -> ExtractionResult:

@@ -131,3 +131,106 @@ def test_enriched_event_is_durable_before_processing(tmp_path):
     assert reopened is not None
     assert reopened.event.attachments == {"files": ["src/a.py"]}
     assert reopened.event.indexed_at == "2024-06-01T10:00:01Z"
+
+
+def test_source_deliveries_and_semantic_jobs_share_one_writer_lane(tmp_path):
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    inbox.upsert_semantic_job(
+        document_id="owner/repo#issue-1",
+        content_signature="signature-1",
+        trigger_delivery_id="seed",
+        total_units=3,
+        now=NOW,
+    )
+    inbox.enqueue(_event("delivery-1"), now=NOW)
+
+    # A ready source observation always wins over enrichment.
+    assert inbox.claim_semantic_job(now=NOW, lease_seconds=30) is None
+    delivery = inbox.claim_next(now=NOW, lease_seconds=30, max_attempts=3)
+    assert delivery is not None and delivery.lease_id is not None
+    inbox.mark_succeeded("delivery-1", delivery.lease_id, now=NOW)
+
+    semantic = inbox.claim_semantic_job(now=NOW, lease_seconds=30)
+    assert semantic is not None and semantic.lease_id is not None
+    inbox.enqueue(_event("delivery-2", number=2), now=NOW)
+    assert inbox.claim_next(now=NOW, lease_seconds=30, max_attempts=3) is None
+
+    inbox.defer_semantic_job(
+        semantic.document_id,
+        semantic.lease_id,
+        "provider unavailable",
+        now=NOW,
+        retry_delay_seconds=0,
+    )
+    next_delivery = inbox.claim_next(now=NOW, lease_seconds=30, max_attempts=3)
+    assert next_delivery is not None
+    assert next_delivery.event.delivery_id == "delivery-2"
+
+
+def test_new_content_signature_replaces_deferred_cursor_durably(tmp_path):
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    document_id = "owner/repo#issue-1"
+    assert (
+        inbox.upsert_semantic_job(
+            document_id=document_id,
+            content_signature="signature-1",
+            trigger_delivery_id="delivery-1",
+            total_units=8,
+            now=NOW,
+        )
+        == "enqueued"
+    )
+    job = inbox.claim_semantic_job(now=NOW, lease_seconds=30)
+    assert job is not None and job.lease_id is not None
+    inbox.advance_semantic_job(document_id, job.lease_id, 4, now=NOW)
+    inbox.defer_semantic_job(
+        document_id,
+        job.lease_id,
+        "quota",
+        now=NOW,
+        retry_delay_seconds=0,
+    )
+
+    assert (
+        inbox.upsert_semantic_job(
+            document_id=document_id,
+            content_signature="signature-2",
+            trigger_delivery_id="delivery-2",
+            total_units=2,
+            now="2024-06-01T10:00:01Z",
+        )
+        == "replaced"
+    )
+    restored = DeliveryInbox(tmp_path / "inbox.sqlite").get_semantic_job(document_id)
+    assert restored is not None
+    assert restored.content_signature == "signature-2"
+    assert restored.next_unit_index == 0
+    assert restored.total_units == 2
+    assert restored.attempts == 0
+    assert restored.status == "pending"
+
+
+def test_deferred_long_document_rotates_behind_less_attempted_documents(tmp_path):
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    for document_id in ("owner/repo#issue-1", "owner/repo#issue-2"):
+        inbox.upsert_semantic_job(
+            document_id=document_id,
+            content_signature=f"signature-{document_id[-1]}",
+            trigger_delivery_id="seed",
+            total_units=20,
+            now=NOW,
+        )
+
+    first = inbox.claim_semantic_job(now=NOW, lease_seconds=30)
+    assert first is not None and first.lease_id is not None
+    inbox.defer_semantic_job(
+        first.document_id,
+        first.lease_id,
+        "batch limit",
+        now=NOW,
+        retry_delay_seconds=0,
+    )
+
+    second = inbox.claim_semantic_job(now=NOW, lease_seconds=30)
+    assert second is not None
+    assert second.document_id != first.document_id

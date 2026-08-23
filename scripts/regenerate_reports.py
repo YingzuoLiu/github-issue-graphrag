@@ -15,10 +15,10 @@ def make_llm():
     if settings.llm_provider == "mock":
         return MockLLMClient()
 
-    if settings.llm_provider == "openai-compatible":
+    if settings.llm_provider in {"openrouter", "openai-compatible"}:
         if not settings.llm_base_url or not settings.llm_api_key or not settings.llm_model:
             raise ValueError(
-                "LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL are required for openai-compatible provider."
+                "LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL are required for the LLM provider."
             )
         return OpenAICompatibleClient(
             base_url=settings.llm_base_url,

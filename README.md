@@ -227,7 +227,7 @@ The Streamlit demo provides a small interface for selecting retrieval mode, runn
 | Payload handling | Issue, pull request and comment ingestion including lock state, native dependency counts and changed files, with paginated PR file hydration — including PRs first seen through a comment |
 | Time model | Immutable fact versions with `valid_from` / `valid_to`, so history stays queryable and historical projections never borrow later knowledge; source-clock record versioning, so stale, partial and out-of-order payloads all converge |
 | Correctness | An explicit ontology separating who may assert a predicate from whether the assertion is legal; a rebuild consistency check fingerprinting direction and provenance |
-| Cost control | Incremental indexing that re-extracts only the documents whose text changed |
+| Cost control | Changed-document extraction, repo-local SQLite cache, cross-repository daily/monthly hard caps and resumable fair batches |
 | Output | Deterministic contribution scoring with per-signal reasons and source links, deterministic fixture replay, a configured repository selector, freshness metadata and a Streamlit timeline of the affected subgraph |
 
 ## Setup
@@ -268,10 +268,15 @@ cp .env.example .env
 Example `.env` for OpenRouter:
 
 ```env
-LLM_PROVIDER=openai-compatible
+LLM_PROVIDER=openrouter
 LLM_BASE_URL=https://openrouter.ai/api/v1
 LLM_API_KEY=your-api-key-here
-LLM_MODEL=your-model-name-here
+LLM_MODEL=google/gemini-3.1-flash-lite
+
+LLM_DAILY_CALLS=250
+LLM_DAILY_INPUT_TOKENS=300000
+LLM_DAILY_OUTPUT_TOKENS=125000
+LLM_MONTHLY_COST_USD=3
 
 EMBEDDING_PROVIDER=sentence-transformers
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
@@ -673,10 +678,43 @@ also enforces connection limits and rate limits. The endpoint itself bounds requ
 seconds by default (`--read-timeout-seconds`) so an unauthenticated slow client cannot pin a handler
 thread indefinitely. It answers `202` only after the exact signed payload is committed to SQLite.
 The request path does not call GitHub or the LLM. The worker then leases one delivery, fetches every
-page of PR files, applies the index, atomically replaces state, appends the audit event once, and
-marks the delivery succeeded. Run `--rules fixtures/live_demo/extraction_rules.json` for
+page of PR files, commits records and deterministic GitHub facts, atomically replaces state,
+appends the audit event once, and marks the source delivery succeeded. Semantic enrichment is a
+separate durable job; provider, cache, or quota failure cannot roll back that source commit or turn
+it into a failed GitHub delivery. Run `--rules fixtures/live_demo/extraction_rules.json` for
 deterministic rules, omit both extraction flags for GitHub facts only, or use `--llm` for the
 configured model.
+
+Live `--llm` is intentionally stricter than the older offline batch scripts. It requires
+`LLM_PROVIDER=openrouter`, sends the exact requested model with strict JSON Schema output and
+`require_parameters=true`, and makes one provider call per changed TextUnit. The extraction prompt
+is versioned as `extraction/2026-08-24` and its exact SHA-256 is asserted at runtime. A prompt,
+model, gateway, schema-version, or content-signature change creates a new cache namespace; actual
+response model/provider/generation id/usage/cost remain audit metadata and never rewrite lookup
+identity.
+
+The operational limits are configurable in `.env`, with these defaults:
+
+| Boundary | Default | Meaning |
+|---|---:|---|
+| all repositories / UTC day | 250 calls, 300k input, 125k output | atomic pre-dispatch hard cap |
+| all repositories / calendar month | USD 3 | local software cost cap, not a subscription or spend target |
+| initial semantic bootstrap | 200 calls, 250k input, 100k output | admission allowance inside the global caps |
+| one resumable semantic batch | 12 calls, 20k input, 10k output | scheduling slice, not a document lifetime cap |
+| one provider call | 800 output tokens | structured extraction ceiling |
+
+Validated unit results are written immediately to each repo's `extraction_cache.sqlite`. A cursor
+in `inbox.db` resumes a long document over later batches, rotating it behind less-attempted work;
+facts and the extraction signature are published only after every unit for the same content
+signature is cached and validated. `data/repos/llm_operations.sqlite` is the shared reservation and
+actual-usage ledger that makes the global caps atomic across repository workers. Unknown outcomes
+retain their conservative reservation. Cache hits consume no provider-call quota.
+
+The model and quota values can be changed later. Quota-only changes do not invalidate cache;
+changing the requested model does. Prompt text changes require a deliberate new prompt version and
+SHA-256, so an experiment cannot silently inherit results from the previous behaviour. To stop
+after a one-time paid acceptance run, set a global cap to `0` or run without `--llm`; deterministic
+GitHub facts continue, last-good semantics remain, and pending work stays recoverable.
 
 GitHub recommends acknowledging webhooks within ten seconds and processing them asynchronously;
 it also says failed deliveries are **not automatically redelivered**. The inbox retries local
@@ -704,7 +742,9 @@ and [redelivery documentation](https://docs.github.com/en/webhooks/testing-and-t
   deliveries. Local processing retries are automatic; source-side backfill remains an explicit
   operator action.
 - The inbox gives at-least-once processing, not exactly-once model billing. A crash before the
-  state commit can repeat an LLM request; a persistent extraction cache is the fix for that.
+  provider response reaches the persistent cache can still leave an unknowable billable attempt.
+  It is conservatively reserved in the quota ledger. Once a validated response is cached, a crash
+  before cursor or state commit does not repeat that provider call.
 - Each repository-qualified local JSON state has one serialized worker. Separate repository lanes
   are isolated, but this is not pretending to be a distributed queue or a cross-repository graph.
 - Storage is still local JSON. The fact model is designed so a graph database can replace the
@@ -1006,7 +1046,8 @@ Known limitations:
 - The graph uses lightweight local JSON storage.
 - Real ingestion intentionally serializes one worker against that JSON state. Horizontal workers
   require a transactional shared state store, not merely more SQLite consumers.
-- There is no persistent LLM request cache yet.
+- Persistent extraction caching covers the live entity/relation path. Older offline batch index,
+  answer, and community-report calls do not use the live M4 cache/quota runner.
 - Local retrieval uses query-term filtering rather than a learned reranker.
 - Generated answers should prefer source snippets over graph edge direction.
 - The live index re-derives GitHub-stated facts for every document on every event. That is
@@ -1074,7 +1115,9 @@ This project demonstrates:
 - Productization development: `0.4.0.dev0`; M1 freezes a real Graphiti contribution contract and
   adds timestamped, zero-write scheduled pilot monitoring, while M2 isolates repository state,
   completes bounded bootstrap pagination and exposes per-repository freshness. M3 carries locked
-  and native dependency signals through versioned GitHub facts into deterministic scoring.
+  and native dependency signals through versioned GitHub facts into deterministic scoring. M4
+  makes live extraction deterministic-first, cached, quota-bounded, resumable and atomically
+  published.
 
 ## Future work
 
@@ -1082,10 +1125,9 @@ This project demonstrates:
   and schedule source-side redelivery before GitHub's retention window expires.
 - **Distributed ingestion storage**: replace the serialized local JSON writer when multi-repository
   or horizontal-worker operation becomes a real requirement.
-- **Persistent LLM cache**: cache extraction and report-generation calls keyed by document
-  signature, model id and prompt version. That would make `--llm` rebuilds cheap and resumable, and
-  would extend the rebuild consistency proof to cover live-model runs instead of only the recorded
-  extraction output.
+- **Extend the live extraction cache to offline reports and answers**: M4 covers live
+  entity/relation extraction; report-generation and free-form answer calls still need their own
+  schemas, identities and budgets before being exposed as public traffic.
 - **Wire scoped report regeneration into the event loop**, so community reports refresh when the
   communities they describe actually change.
 - **Pull requests as opportunities**: rank PRs that need review alongside unclaimed issues.
