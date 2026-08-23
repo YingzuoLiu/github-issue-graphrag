@@ -117,6 +117,6 @@ def test_one_repository_failure_does_not_block_another_repository_lane(tmp_path)
     assert not failed_paths.state.exists()
     assert read_state(healthy_paths.state).repo == "beta/two"
     assert read_freshness(failed_paths.freshness, failed_paths.repo).semantic_status == "degraded"
-    assert read_freshness(healthy_paths.freshness, healthy_paths.repo).semantic_status == "current"
+    assert read_freshness(healthy_paths.freshness, healthy_paths.repo).semantic_status == "pending"
     assert failed_inbox.count("failed") == 1
     assert healthy_inbox.count("succeeded") == 1

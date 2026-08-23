@@ -120,13 +120,19 @@ class DeliveryProcessor:
         state_commit_at: str | None,
         semantic_updated_at: str,
         error: str | None,
+        semantic_pending: bool = False,
     ) -> None:
         if self.freshness_path is None:
             return
         freshness = read_freshness(self.freshness_path, self.repo)
         if state_commit_at is not None:
             freshness.last_state_commit_at = state_commit_at
-        freshness.semantic_status = "degraded" if error else "current"
+        if error:
+            freshness.semantic_status = "degraded"
+        elif semantic_pending:
+            freshness.semantic_status = "pending"
+        else:
+            freshness.semantic_status = "current"
         freshness.semantic_updated_at = semantic_updated_at
         freshness.last_error = error
         write_freshness(self.freshness_path, freshness)
@@ -144,6 +150,11 @@ class DeliveryProcessor:
         if dependency is not None:
             dependency_repo, number = dependency
             if dependency_repo.casefold() != self.repo.casefold():
+                return
+            # Hydration is durable replay input. A retry after state commit but
+            # before event-log append must reuse the exact observation that was
+            # applied, even if GitHub's current dependency state has moved on.
+            if "blocking_dependency_count" in event.attachments:
                 return
             if self.github is None:
                 raise RuntimeError("issue_dependencies processing requires a GitHub read client")
@@ -216,6 +227,11 @@ class DeliveryProcessor:
                 state_commit_at=event.indexed_at or completed_at,
                 semantic_updated_at=completed_at,
                 error=None,
+                semantic_pending=any(
+                    state.extraction_signatures.get(document_id)
+                    != item.extraction_signature()
+                    for document_id, item in state.items.items()
+                ),
             )
             self.inbox.mark_succeeded(event.delivery_id, lease_id, now=completed_at)
             return ProcessingResult(event.delivery_id, "succeeded", delta=delta)

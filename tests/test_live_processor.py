@@ -8,6 +8,7 @@ from issue_graphrag.live.inbox import DeliveryInbox
 from issue_graphrag.live.indexer import NullExtractor
 from issue_graphrag.models import ExtractionResult
 from issue_graphrag.live.processor import DeliveryProcessor, ProcessingResult, run_worker_loop
+from issue_graphrag.live.repositories import read_freshness
 from issue_graphrag.live.store import read_state
 
 NOW = "2024-06-01T10:00:00Z"
@@ -71,6 +72,7 @@ def _processor(tmp_path, inbox, extractor=None, github=None, log=None, max_attem
         lease_seconds=30,
         retry_delay_seconds=0,
         max_attempts=max_attempts,
+        freshness_path=tmp_path / "freshness.json",
     )
 
 
@@ -161,6 +163,8 @@ def test_github_only_mode_leaves_changed_text_pending_for_a_future_extractor(tmp
     assert result is not None and result.status == "succeeded"
     state = read_state(tmp_path / "live_state.json")
     assert f"{REPO}#issue-7" not in state.extraction_signatures
+    freshness = read_freshness(tmp_path / "freshness.json", REPO)
+    assert freshness.semantic_status == "pending"
 
 
 def test_dependency_webhooks_hydrate_active_count_and_clear_blocked_status(tmp_path):
@@ -217,6 +221,38 @@ def test_dependency_webhooks_hydrate_active_count_and_clear_blocked_status(tmp_p
         fact.predicate == "has_blocking_dependencies" for fact in state.valid_facts()
     )
     assert github.dependency_calls == [(REPO, 7), (REPO, 7)]
+
+
+def test_dependency_retry_reuses_the_observation_already_committed_to_state(tmp_path):
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    event = make_event(
+        "dependency-crash",
+        "issue_dependencies",
+        {
+            "action": "blocked_by_added",
+            "blocked_issue": {
+                **issue_payload(7),
+                "repository_url": f"https://api.github.com/repos/{REPO}",
+            },
+            "blocking_issue": issue_payload(8),
+        },
+        NOW,
+    )
+    inbox.enqueue(event, now=NOW)
+    github = FakeGitHubClient(dependency_counts=[2, 0])
+    log = FailOnceEventLog(tmp_path / "events.jsonl")
+    processor = _processor(tmp_path, inbox, github=github, log=log)
+
+    first = processor.process_one(now=NOW)
+    second = processor.process_one(now="2024-06-01T10:00:01Z")
+
+    assert first is not None and first.status == "retrying"
+    assert second is not None and second.status == "succeeded"
+    assert github.dependency_calls == [(REPO, 7)]
+    state = read_state(tmp_path / "live_state.json")
+    assert state.items[f"{REPO}#issue-7"].blocking_dependency_count == 2
+    logged = EventLog(tmp_path / "events.jsonl").read_all()
+    assert logged[0].attachments["blocking_dependency_count"] == 2
 
 
 def test_crash_after_state_write_recovers_without_duplicate_extraction_or_log(tmp_path):
