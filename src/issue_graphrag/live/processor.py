@@ -145,16 +145,28 @@ class DeliveryProcessor:
             raise ValueError(f"state belongs to {state.repo!r}, not {self.repo!r}")
         return state
 
+    def _needs_hydration(self, event: RepoEvent, key: str) -> bool:
+        """Whether this delivery still has to fetch ``key`` from GitHub.
+
+        Hydration is durable replay input, not transient API state. A retry
+        after the state commit but before the event-log append must reuse the
+        exact observation that was already applied, even when GitHub has moved
+        on in between. Re-reading would leave the audit log and the live state
+        holding two different observations of one delivery, and replay would
+        stop describing what the index actually did.
+
+        Every attachment the worker fetches goes through this rule; today those
+        are ``files`` and ``blocking_dependency_count``.
+        """
+        return key not in event.attachments
+
     def _hydrate(self, event: RepoEvent, state: LiveState) -> None:
         dependency = dependency_issue(event)
         if dependency is not None:
             dependency_repo, number = dependency
             if dependency_repo.casefold() != self.repo.casefold():
                 return
-            # Hydration is durable replay input. A retry after state commit but
-            # before event-log append must reuse the exact observation that was
-            # applied, even if GitHub's current dependency state has moved on.
-            if "blocking_dependency_count" in event.attachments:
+            if not self._needs_hydration(event, "blocking_dependency_count"):
                 return
             if self.github is None:
                 raise RuntimeError("issue_dependencies processing requires a GitHub read client")
@@ -168,6 +180,7 @@ class DeliveryProcessor:
             number is None
             or self.github is None
             or not self.hydrate_pull_request_files
+            or not self._needs_hydration(event, "files")
         ):
             return
         known = state.items.get(f"{event.repo}#pull-{number}")
