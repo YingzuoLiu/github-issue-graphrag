@@ -26,6 +26,9 @@ SUPPORTED_EVENT_ACTIONS: dict[str, frozenset[str] | None] = {
     "issues": None,
     "pull_request": None,
     "issue_comment": frozenset({"created", "edited", "deleted"}),
+    "issue_dependencies": frozenset(
+        {"blocked_by_added", "blocked_by_removed", "blocking_added", "blocking_removed"}
+    ),
 }
 
 ItemKind = Literal["issue", "pull_request"]
@@ -106,6 +109,7 @@ def merge_item(
     kind: ItemKind,
     delivery_id: str,
     files: list[str] | None = None,
+    field_version_overrides: dict[str, SourceVersion] | None = None,
 ) -> RepoItem:
     """Apply each present field when its own source version wins.
 
@@ -129,11 +133,12 @@ def merge_item(
     )
 
     def assign(field: str, value: Any) -> None:
+        version = (field_version_overrides or {}).get(field, incoming)
         previous = item.field_versions.get(field)
-        if previous is not None and incoming.key() < previous.key():
+        if previous is not None and version.key() < previous.key():
             return
         setattr(item, field, value)
-        item.field_versions[field] = incoming.model_copy()
+        item.field_versions[field] = version.model_copy()
 
     item.kind = "pull_request" if kind == "pull_request" else item.kind
     item.repo = repo
@@ -197,6 +202,7 @@ def upsert_item(
     kind: ItemKind,
     delivery_id: str,
     files: list[str] | None = None,
+    field_version_overrides: dict[str, SourceVersion] | None = None,
 ) -> tuple[str, bool]:
     """Merge a payload using independent source versions for every present field.
 
@@ -209,7 +215,15 @@ def upsert_item(
     existing = state.items.get(document_id)
 
     before = existing.model_dump() if existing is not None else None
-    merged = merge_item(existing, repo, payload, kind, delivery_id, files)
+    merged = merge_item(
+        existing,
+        repo,
+        payload,
+        kind,
+        delivery_id,
+        files,
+        field_version_overrides,
+    )
     state.items[document_id] = merged
     return document_id, before != merged.model_dump()
 
@@ -325,6 +339,39 @@ def apply_event_to_records(state: LiveState, event: RepoEvent) -> list[str]:
         else:
             upsert_comment(state, document_id, comment, delivery)
         return [document_id]
+
+    if event.event_type == "issue_dependencies":
+        blocked = payload.get("blocked_issue") or {}
+        if not isinstance(blocked, dict) or blocked.get("number") is None:
+            raise UnsupportedEvent("issue_dependencies event without a blocked_issue payload")
+        count = event.attachments.get("blocking_dependency_count")
+        if count is None:
+            raise UnsupportedEvent("issue_dependencies event without REST hydration")
+
+        repository_url = str(blocked.get("repository_url") or "")
+        if "/repos/" in repository_url:
+            blocked_repo = repository_url.split("/repos/", 1)[1].strip("/")
+            blocked_repo = "/".join(blocked_repo.split("/")[:2])
+            if blocked_repo.casefold() != repo.casefold():
+                raise UnsupportedEvent("issue_dependencies event targets another repository")
+
+        number = int(blocked["number"])
+        kind = resolve_kind(state, repo, number, blocked)
+        observed = SourceVersion(
+            effective_at=event.indexed_at or event.received_at,
+            delivery_id=delivery,
+        )
+        enriched = {**blocked, "blocking_dependency_count": count}
+        return [
+            upsert_item(
+                state,
+                repo,
+                enriched,
+                kind,
+                delivery,
+                field_version_overrides={"blocking_dependency_count": observed},
+            )[0]
+        ]
 
     raise UnsupportedEvent(f"unsupported event type: {event.event_type}")
 
