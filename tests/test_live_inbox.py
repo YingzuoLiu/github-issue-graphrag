@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import sqlite3
+
 import pytest
 from conftest import issue_payload, make_event
 
 from issue_graphrag.live.inbox import DeliveryConflict, DeliveryInbox, LeaseLostError
+from issue_graphrag.live.models import RepoEvent
 
 NOW = "2024-06-01T10:00:00Z"
 
@@ -31,6 +36,50 @@ def test_inbox_deduplicates_a_delivery_and_rejects_id_reuse(tmp_path):
     assert stored is not None
     assert stored.event.payload["issue"]["number"] == 1
     assert inbox.count() == 1
+
+
+def _released_fingerprint(event: RepoEvent) -> str:
+    """The fingerprint exactly as the released v0.3.0 inbox wrote it to disk."""
+    payload = {
+        "event_type": event.event_type,
+        "action": event.action,
+        "repo": event.repo,
+        "payload": event.payload,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _age_row_to_released_format(inbox: DeliveryInbox, event: RepoEvent) -> None:
+    with sqlite3.connect(inbox.path) as connection:
+        connection.execute(
+            "UPDATE deliveries SET fingerprint = ? WHERE delivery_id = ?",
+            (_released_fingerprint(event), event.delivery_id),
+        )
+
+
+def test_a_row_written_by_the_released_version_still_matches_its_delivery(tmp_path):
+    """The stored fingerprint is an on-disk contract, not an internal detail.
+
+    Deliveries outlive the version that enqueued them. If an upgrade changes
+    what the fingerprint covers, every row already in the inbox stops matching
+    its own event: GitHub redelivery is rejected as payload reuse and the
+    worker cannot even persist enrichment for a delivery it just claimed.
+    """
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    event = _event("delivery-1")
+    inbox.enqueue(event, now=NOW)
+    _age_row_to_released_format(inbox, event)
+
+    assert inbox.enqueue(event, now=NOW).outcome == "duplicate"
+
+    claimed = inbox.claim_next(now=NOW, lease_seconds=30, max_attempts=3)
+    assert claimed is not None
+    claimed.event.attachments["files"] = ["src/a.py"]
+    inbox.update_event(claimed.event, lease_id=claimed.lease_id, now=NOW)
+
+    with pytest.raises(DeliveryConflict, match="different payload"):
+        inbox.enqueue(_event("delivery-1", number=2), now=NOW)
 
 
 def test_only_one_delivery_can_be_processing_and_an_expired_lease_is_reclaimed(tmp_path):

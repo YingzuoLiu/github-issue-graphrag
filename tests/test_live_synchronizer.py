@@ -8,6 +8,7 @@ import requests
 from issue_graphrag.live.events import EventLog
 from issue_graphrag.live.inbox import DeliveryInbox
 from issue_graphrag.live.indexer import NullExtractor
+from issue_graphrag.live.models import RepoEvent
 from issue_graphrag.live.processor import DeliveryProcessor
 from issue_graphrag.live.projection import project_graph
 from issue_graphrag.live.contribution import opportunities
@@ -497,7 +498,9 @@ def test_conditional_get_reuses_cached_representation_on_304():
     )
     second = client.observe(REPO, previous, config, LATER)
 
-    assert set(first.resources) == set(second.resources) == {"issue:7", "dependency:7"}
+    # ``dependency_limit_per_issue=0`` reads no blocked_by page, so this poll
+    # made no dependency observation at all.
+    assert set(first.resources) == set(second.resources) == {"issue:7"}
     assert second.not_modified_requests == 1
     assert session.calls[1][1]["headers"]["If-None-Match"] == '"issues-v1"'
     assert client.write_request_count == 0
@@ -557,3 +560,130 @@ def test_x_poll_interval_extends_visible_next_sync_time(tmp_path):
     assert result.next_sync_at == "2026-08-24T02:20:00Z"
     freshness = read_freshness(paths.freshness, REPO)
     assert freshness.sync_interval_seconds == 1200
+
+
+def _blocked_by_added_webhook(count: int) -> RepoEvent:
+    return RepoEvent(
+        delivery_id=f"webhook-dependency-{count}",
+        event_type="issue_dependencies",
+        action="blocked_by_added",
+        repo=REPO,
+        received_at=NOW,
+        payload={
+            "action": "blocked_by_added",
+            "repository": {"full_name": REPO},
+            "blocked_issue": {
+                "number": 7,
+                "repository_url": f"https://api.github.com/repos/{REPO}",
+            },
+        },
+        attachments={"blocking_dependency_count": count},
+    )
+
+
+def _drain(paths, now: str) -> None:  # noqa: ANN001
+    processor = DeliveryProcessor(
+        repo=paths.repo,
+        inbox=DeliveryInbox(paths.inbox),
+        state_path=paths.state,
+        event_log=EventLog(paths.event_log),
+        extractor=NullExtractor(),
+        freshness_path=paths.freshness,
+    )
+    while True:
+        processed = processor.process_one(now=now)
+        if processed is None:
+            return
+        assert processed.status == "succeeded", processed.error
+
+
+def test_first_observation_of_no_blockers_repairs_a_missed_removal(tmp_path):
+    """The safety net exists for exactly this drift, so its first poll must fix it.
+
+    A ``blocked_by_removed`` webhook never arrived, so live state still calls the
+    issue blocked. The checkpoint is empty on the first scheduled poll, and it
+    describes GitHub, never live state: treating that first fully observed zero
+    as a mere baseline would leave the stale block in place for good, because
+    every later poll sees an unchanged zero and emits nothing.
+    """
+    paths = RepoRegistry(tmp_path).register(REPO)
+    inbox = DeliveryInbox(paths.inbox)
+    inbox.enqueue(_blocked_by_added_webhook(2), now=NOW)
+    _drain(paths, NOW)
+    assert read_state(paths.state).items[f"{REPO}#issue-7"].blocking_dependency_count == 2
+
+    observer = StaticObserver(
+        _observation([_issue_resource(updated_at=LATER), _dependency_resource(0, updated_at=LATER)])
+    )
+    synchronizer, _ = _synchronizer(tmp_path, observer, inbox=DeliveryInbox(paths.inbox))
+    result = synchronizer.sync_once(now=LATER)
+    assert result.status == "succeeded"
+    _drain(paths, LATER)
+
+    state = read_state(paths.state)
+    assert state.items[f"{REPO}#issue-7"].blocking_dependency_count == 0
+    assert opportunities(project_graph(state))[0].status == "available"
+
+
+def test_incomplete_dependency_window_is_not_a_zero_observation():
+    """An unread blocked_by page must never publish a blocked issue as available."""
+    session = FakeSession(
+        [
+            FakeResponse(200, [_raw_issue()]),
+            FakeResponse(
+                200,
+                [{"number": 11, "state": "closed"}, {"number": 12, "state": "closed"}],
+            ),
+        ]
+    )
+    client = ConditionalGitHubClient(session=session, sleep=lambda _: None)
+    config = _http_config(dependency_limit_per_issue=2, dependency_max_pages=1)
+
+    observed = client.observe(REPO, RepoSyncState(repo=REPO), config, NOW)
+
+    assert "dependency:7" not in observed.resources
+    previous = RepoSyncState(repo=REPO, resources={"dependency:7": _dependency_resource(3)})
+    plan = plan_reconciliation(REPO, previous, observed)
+    assert [event.event_type for event in plan.events] == ["issues"]
+    assert plan.resources["dependency:7"].attachments["blocking_dependency_count"] == 3
+
+
+def test_incomplete_file_window_leaves_the_file_set_to_worker_hydration():
+    session = FakeSession(
+        [
+            FakeResponse(200, [{**_raw_issue(), "pull_request": {}}]),
+            FakeResponse(200, {"number": 7, "merged": False, "draft": False}),
+            FakeResponse(200, [{"filename": "src/a.py"}, {"filename": "src/b.py"}]),
+        ]
+    )
+    client = ConditionalGitHubClient(session=session, sleep=lambda _: None)
+    config = _http_config(file_limit_per_pull=2, file_max_pages=1)
+
+    observed = client.observe(REPO, RepoSyncState(repo=REPO), config, NOW)
+
+    assert "files" not in observed.resources["pull_request:7"].attachments
+
+
+def test_a_rate_limit_reset_already_in_the_past_still_waits():
+    """A host clock ahead of GitHub's must not turn a refusal into a hot loop."""
+    now = datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc)
+    stale_reset = int(datetime(2026, 8, 24, 1, 30, tzinfo=timezone.utc).timestamp())
+    session = FakeSession(
+        [
+            FakeResponse(
+                403,
+                {"message": "rate limited"},
+                {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(stale_reset)},
+            )
+        ]
+    )
+    client = ConditionalGitHubClient(
+        session=session,
+        sleep=lambda _: pytest.fail("rate limits must not block the process"),
+        clock=lambda: now,
+    )
+
+    with pytest.raises(RateLimitedError) as caught:
+        client.observe(REPO, RepoSyncState(repo=REPO), _http_config(), NOW)
+
+    assert caught.value.retry_at == "2026-08-24T02:00:00Z"

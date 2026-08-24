@@ -250,7 +250,10 @@ def _retry_at_from_headers(headers: Mapping[str, Any], now: datetime) -> str:
     reset = _header(headers, "X-RateLimit-Reset")
     if reset:
         try:
-            return to_iso(datetime.fromtimestamp(int(reset), tz=timezone.utc))
+            # A reset already in the past (host clock ahead of GitHub's, or a
+            # stale header) must not become an immediate retry: the loop would
+            # spin on refusals instead of waiting.
+            return to_iso(max(now, datetime.fromtimestamp(int(reset), tz=timezone.utc)))
         except (OverflowError, TypeError, ValueError):
             pass
     return to_iso(now + timedelta(seconds=60))
@@ -453,7 +456,12 @@ class ConditionalGitHubClient:
             is_pull = "pull_request" in listed_item
             kind: ParentKind = "pull_request" if is_pull else "issue"
             raw = dict(listed_item)
-            files: list[str] = []
+            # A window this poll could not read to the end is not an
+            # observation. Attaching a truncated file set would state that the
+            # pull request touches fewer modules than it does; leaving the
+            # attachment out keeps the last-good value and lets the worker's
+            # own bounded hydration fill it in.
+            files: list[str] | None = None
             if is_pull:
                 raw.update(self._get_object(f"{api}/pulls/{number}", cache, config))
                 file_rows = self._get_paginated(
@@ -464,9 +472,10 @@ class ConditionalGitHubClient:
                     cache=cache,
                     config=config,
                 )
-                files = sorted(
-                    {str(row["filename"]) for row in file_rows.rows if row.get("filename")}
-                )
+                if file_rows.complete:
+                    files = sorted(
+                        {str(row["filename"]) for row in file_rows.rows if row.get("filename")}
+                    )
 
             comments = self._get_paginated(
                 f"{api}/issues/{number}/comments",
@@ -476,7 +485,10 @@ class ConditionalGitHubClient:
                 cache=cache,
                 config=config,
             )
-            dependency_count = 0
+            # Same rule, and it matters more here: a partially read blocked_by
+            # page counted as a number would settle an unknown count at zero and
+            # publish a blocked issue as available.
+            dependency_count: int | None = None
             if kind == "issue":
                 blockers = self._get_paginated(
                     f"{api}/issues/{number}/dependencies/blocked_by",
@@ -486,9 +498,10 @@ class ConditionalGitHubClient:
                     cache=cache,
                     config=config,
                 )
-                dependency_count = sum(
-                    str(row.get("state") or "").casefold() == "open" for row in blockers.rows
-                )
+                if blockers.complete:
+                    dependency_count = sum(
+                        str(row.get("state") or "").casefold() == "open" for row in blockers.rows
+                    )
 
             item_payload = _item_payload(raw, kind)
             source_updated_at = _item_updated_at(item_payload, observed_at)
@@ -500,12 +513,12 @@ class ConditionalGitHubClient:
                 identity=item_key,
                 source_updated_at=source_updated_at,
                 payload=item_payload,
-                attachments={"files": files} if kind == "pull_request" else {},
+                attachments={"files": files} if files is not None else {},
                 parent_kind=kind,
                 parent_number=number,
             )
 
-            if kind == "issue":
+            if kind == "issue" and dependency_count is not None:
                 dependency_key = f"dependency:{number}"
                 resources[dependency_key] = SyncResource.observed(
                     kind="dependency",
@@ -778,14 +791,12 @@ def plan_reconciliation(
         prior = previous.resources.get(key)
         changed = prior is None or prior.fingerprint != current.fingerprint
         if changed:
-            # A brand-new zero dependency is only a baseline observation, not
-            # a user-visible state transition worth adding to event history.
-            if not (
-                current.kind == "dependency"
-                and prior is None
-                and int(current.payload.get("count") or 0) == 0
-            ):
-                events.append(_event_for_resource(normalized, current, prior))
+            # Including a first fully observed zero dependency count. The
+            # checkpoint says nothing about live state, so suppressing that
+            # baseline is what would keep a stale blocking count alive after a
+            # missed blocked_by_removed webhook - the drift this lane exists to
+            # repair. Every other resource kind already emits its baseline.
+            events.append(_event_for_resource(normalized, current, prior))
         resources[key] = current.model_copy(deep=True)
 
     events.sort(key=lambda event: (event.received_at, event.delivery_id))

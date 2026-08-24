@@ -98,6 +98,13 @@ python scripts/sync_repositories.py owner/name --loop --interval-seconds 900
 python scripts/process_webhooks.py --repo owner/name
 ```
 
+A bounded page this poll could not read to its end is not an observation. A truncated
+`blocked_by` page never becomes a dependency count and a truncated file page never becomes a file
+set, so an operator-configured bound can never publish a blocked issue as available or narrow a
+pull request's modules; the previous value stays until a complete window replaces it. A first
+complete observation is delivered like any other, which is what repairs a `blocked_by_removed`
+webhook that never arrived.
+
 The default cadence is 15 minutes (`GITHUB_SYNC_INTERVAL_SECONDS=900`). Requests are serial,
 read-only and conditional when GitHub supplied `ETag` or `Last-Modified`; `X-Poll-Interval` may
 extend the cadence. Retryable network/5xx failures use bounded exponential backoff. Rate-limit
