@@ -109,7 +109,8 @@ The default cadence is 15 minutes (`GITHUB_SYNC_INTERVAL_SECONDS=900`). Requests
 read-only and conditional when GitHub supplied `ETag` or `Last-Modified`; `X-Poll-Interval` may
 extend the cadence. Retryable network/5xx failures use bounded exponential backoff. Rate-limit
 responses do not sleep in-process: their `Retry-After` or `X-RateLimit-Reset` becomes the visible
-next attempt. A failed observation or partial enqueue never advances `sync_state.json`; the
+next attempt, with a positive one-minute fallback for stale or zero hints. A failed observation or
+partial enqueue never advances `sync_state.json`; the
 last-good snapshot remains available, freshness becomes `stale`, and a retry uses the same
 delivery ids. This converges current issue, pull request, comment, changed-file and dependency
 state, but deliberately does not reconstruct GitHub's missed webhook chronology.

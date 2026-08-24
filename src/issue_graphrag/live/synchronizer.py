@@ -235,16 +235,19 @@ def _request_key(url: str, params: Mapping[str, Any]) -> str:
 
 
 def _retry_at_from_headers(headers: Mapping[str, Any], now: datetime) -> str:
+    fallback = now + timedelta(seconds=60)
     retry_after = _header(headers, "Retry-After")
     if retry_after:
         try:
-            return to_iso(now + timedelta(seconds=max(0, int(retry_after))))
+            seconds = int(retry_after)
+            return to_iso(now + timedelta(seconds=seconds)) if seconds > 0 else to_iso(fallback)
         except ValueError:
             try:
                 parsed = parsedate_to_datetime(retry_after)
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=timezone.utc)
-                return to_iso(max(now, parsed.astimezone(timezone.utc)))
+                candidate = parsed.astimezone(timezone.utc)
+                return to_iso(candidate if candidate > now else fallback)
             except (TypeError, ValueError):
                 pass
     reset = _header(headers, "X-RateLimit-Reset")
@@ -253,10 +256,11 @@ def _retry_at_from_headers(headers: Mapping[str, Any], now: datetime) -> str:
             # A reset already in the past (host clock ahead of GitHub's, or a
             # stale header) must not become an immediate retry: the loop would
             # spin on refusals instead of waiting.
-            return to_iso(max(now, datetime.fromtimestamp(int(reset), tz=timezone.utc)))
+            candidate = datetime.fromtimestamp(int(reset), tz=timezone.utc)
+            return to_iso(candidate if candidate > now else fallback)
         except (OverflowError, TypeError, ValueError):
             pass
-    return to_iso(now + timedelta(seconds=60))
+    return to_iso(fallback)
 
 
 class ConditionalGitHubClient:

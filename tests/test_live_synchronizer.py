@@ -664,16 +664,28 @@ def test_incomplete_file_window_leaves_the_file_set_to_worker_hydration():
     assert "files" not in observed.resources["pull_request:7"].attachments
 
 
-def test_a_rate_limit_reset_already_in_the_past_still_waits():
-    """A host clock ahead of GitHub's must not turn a refusal into a hot loop."""
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Retry-After": "0"},
+        {"Retry-After": "Mon, 24 Aug 2026 01:30:00 GMT"},
+        {
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset": str(
+                int(datetime(2026, 8, 24, 1, 30, tzinfo=timezone.utc).timestamp())
+            ),
+        },
+    ],
+)
+def test_non_future_rate_limit_hints_use_a_positive_fallback(headers):  # noqa: ANN001
+    """A stale or zero hint must not turn a refusal into a hot loop."""
     now = datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc)
-    stale_reset = int(datetime(2026, 8, 24, 1, 30, tzinfo=timezone.utc).timestamp())
     session = FakeSession(
         [
             FakeResponse(
                 403,
                 {"message": "rate limited"},
-                {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(stale_reset)},
+                headers,
             )
         ]
     )
@@ -686,4 +698,4 @@ def test_a_rate_limit_reset_already_in_the_past_still_waits():
     with pytest.raises(RateLimitedError) as caught:
         client.observe(REPO, RepoSyncState(repo=REPO), _http_config(), NOW)
 
-    assert caught.value.retry_at == "2026-08-24T02:00:00Z"
+    assert caught.value.retry_at == "2026-08-24T02:01:00Z"

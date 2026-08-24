@@ -771,9 +771,10 @@ python scripts/sync_repositories.py getzep/graphiti --status
 
 Set `GITHUB_SYNC_INTERVAL_SECONDS` to change the 900-second default. GitHub's
 `X-Poll-Interval` can extend it. A rate-limit reset becomes the next attempt time without blocking
-the process, never earlier than the refusal itself; network and server failures receive bounded
-retries. A bounded page the poll could not finish reading is left unobserved rather than recorded
-as a smaller number, so the last complete observation stands. Any incomplete fetch or enqueue
+the process; a stale or zero retry hint uses a positive one-minute fallback. Network and server
+failures receive bounded retries. A bounded page the poll could not finish reading is left
+unobserved, not recorded as a smaller number, so the last complete observation stands. Any
+incomplete fetch or enqueue
 leaves the previous checkpoint intact and marks source freshness stale. See
 [`docs/repository-isolation.md`](docs/repository-isolation.md) for the checkpoint, bounds and
 failure semantics.
