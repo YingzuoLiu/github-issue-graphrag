@@ -20,7 +20,11 @@ from __future__ import annotations
 
 from issue_graphrag.live.contribution import diff_opportunities, opportunities
 from issue_graphrag.live.documents import text_units_for
-from issue_graphrag.live.extraction import Extractor, llm_facts_for_item
+from issue_graphrag.live.extraction import (
+    Extractor,
+    llm_facts_for_item,
+    llm_facts_from_result,
+)
 from issue_graphrag.live.facts import ItemIndex, github_facts_for_item
 from issue_graphrag.live.models import (
     Fact,
@@ -36,6 +40,7 @@ from issue_graphrag.live.projection import diff_graphs, project_graph
 from issue_graphrag.live.records import UnsupportedEvent, apply_event_to_records
 from issue_graphrag.live.store import reconcile_facts
 from issue_graphrag.live.timeutil import is_after, max_iso, next_iso, to_iso
+from issue_graphrag.models import ExtractionResult
 
 SEED_DELIVERY = "seed"
 REBUILD_DELIVERY = "rebuild"
@@ -95,29 +100,45 @@ def refresh_deterministic(state: LiveState, moment: str, delivery_id: str) -> li
     return changes
 
 
-def _extraction_is_stale(state: LiveState, document_id: str, item: RepoItem) -> bool:
+def _extraction_is_stale(
+    state: LiveState,
+    document_id: str,
+    item: RepoItem,
+    semantic_namespace: str | None = None,
+) -> bool:
     """The one definition of "this document still owes extraction".
 
     Freshness reporting and the extraction pass have to agree on this. A
     second copy of the comparison is how a worker starts calling stale state
     ``current`` again.
     """
-    return state.extraction_signatures.get(document_id) != item.extraction_signature()
+    if state.extraction_signatures.get(document_id) != item.extraction_signature():
+        return True
+    return (
+        semantic_namespace is not None
+        and state.extraction_namespaces.get(document_id) != semantic_namespace
+    )
 
 
-def pending_extraction_documents(state: LiveState) -> list[str]:
+def pending_extraction_documents(
+    state: LiveState,
+    semantic_namespace: str | None = None,
+) -> list[str]:
     """Documents whose extraction input changed since they were last extracted."""
     return sorted(
         document_id
         for document_id, item in state.items.items()
-        if _extraction_is_stale(state, document_id, item)
+        if _extraction_is_stale(state, document_id, item, semantic_namespace)
     )
 
 
-def has_pending_extraction(state: LiveState) -> bool:
+def has_pending_extraction(
+    state: LiveState,
+    semantic_namespace: str | None = None,
+) -> bool:
     """Whether any document still owes semantic extraction."""
     return any(
-        _extraction_is_stale(state, document_id, item)
+        _extraction_is_stale(state, document_id, item, semantic_namespace)
         for document_id, item in state.items.items()
     )
 
@@ -127,9 +148,15 @@ def refresh_inferred(
     extractor: Extractor | RecordedExtractor,
     moment: str,
     delivery_id: str,
+    document_ids: list[str] | None = None,
 ) -> tuple[list[FactChange], list[RejectedFact], list[str]]:
     """Run scoped extraction and let the ontology decide what may be stored."""
-    stale = pending_extraction_documents(state)
+    pending = set(pending_extraction_documents(state))
+    stale = (
+        sorted(pending)
+        if document_ids is None
+        else sorted(document_id for document_id in set(document_ids) if document_id in pending)
+    )
     if not stale:
         return [], [], []
 
@@ -143,6 +170,7 @@ def refresh_inferred(
                 reconcile_facts(state, document_id, "llm", [], moment, delivery_id)
             )
             state.extraction_signatures.pop(document_id, None)
+            state.extraction_namespaces.pop(document_id, None)
         return changes, [], []
 
     changes: list[FactChange] = []
@@ -162,8 +190,34 @@ def refresh_inferred(
         rejected.extend(RejectedFact(fact=fact, reason=reason) for fact, reason in refused)
         changes.extend(reconcile_facts(state, document_id, "llm", kept, moment, delivery_id))
         state.extraction_signatures[document_id] = item.extraction_signature()
+        # Generic/fixture extractors have no auditable operational namespace.
+        state.extraction_namespaces.pop(document_id, None)
 
     return changes, rejected, stale
+
+
+def publish_inferred_result(
+    state: LiveState,
+    document_id: str,
+    result: ExtractionResult,
+    moment: str,
+    delivery_id: str,
+    semantic_namespace: str,
+) -> tuple[list[FactChange], list[RejectedFact]]:
+    """Atomically reconcile one fully cached document extraction into ``state``."""
+    item = state.items[document_id]
+    candidates = llm_facts_from_result(
+        item,
+        text_units_for(item),
+        result,
+        moment,
+        delivery_id,
+    )
+    kept, refused = validate_inferred(candidates)
+    changes = reconcile_facts(state, document_id, "llm", kept, moment, delivery_id)
+    state.extraction_signatures[document_id] = item.extraction_signature()
+    state.extraction_namespaces[document_id] = semantic_namespace
+    return changes, [RejectedFact(fact=fact, reason=reason) for fact, reason in refused]
 
 
 def _refresh(
@@ -194,8 +248,13 @@ def bootstrap(
     return state
 
 
-def apply_event(state: LiveState, event: RepoEvent, extractor: Extractor) -> GraphDelta:
-    """Apply one delivery and report exactly what it changed."""
+def _apply_event(
+    state: LiveState,
+    event: RepoEvent,
+    extractor: Extractor,
+    *,
+    include_inferred: bool,
+) -> GraphDelta:
     if state.has_delivery(event.delivery_id):
         # A worker may have committed state and crashed before appending the
         # audit log. Its inbox copy already carries the original index clock;
@@ -241,7 +300,17 @@ def apply_event(state: LiveState, event: RepoEvent, extractor: Extractor) -> Gra
         delta.skip_reason = str(exc)
         return delta
 
-    changes, rejected, reextracted = _refresh(state, extractor, moment, event.delivery_id)
+    changes = refresh_deterministic(state, moment, event.delivery_id)
+    rejected: list[RejectedFact] = []
+    reextracted: list[str] = []
+    if include_inferred:
+        inferred, rejected, reextracted = refresh_inferred(
+            state,
+            extractor,
+            moment,
+            event.delivery_id,
+        )
+        changes.extend(inferred)
 
     after_graph = project_graph(state)
     graph_diff = diff_graphs(before_graph, after_graph)
@@ -262,6 +331,25 @@ def apply_event(state: LiveState, event: RepoEvent, extractor: Extractor) -> Gra
         before_opportunities, opportunities(after_graph)
     )
     return delta
+
+
+def apply_event_deterministic(state: LiveState, event: RepoEvent) -> GraphDelta:
+    """Commit one source delivery without running semantic enrichment.
+
+    The durable worker uses this phase first. Once its state and audit event are
+    written, a provider/cache/quota failure can only defer semantic work; it can
+    no longer turn a successfully observed GitHub delivery into a failed one.
+    """
+    return _apply_event(state, event, NullExtractor(), include_inferred=False)
+
+
+def apply_event(state: LiveState, event: RepoEvent, extractor: Extractor) -> GraphDelta:
+    """Apply one delivery synchronously, including extraction when configured.
+
+    Offline replay keeps this compact path. The durable live worker deliberately
+    uses :func:`apply_event_deterministic` and a separately leased semantic job.
+    """
+    return _apply_event(state, event, extractor, include_inferred=True)
 
 
 def replay(state: LiveState, events: list[RepoEvent], extractor: Extractor) -> list[GraphDelta]:
@@ -294,5 +382,12 @@ def rebuild(
         items={key: value.model_copy(deep=True) for key, value in state.items.items()},
     )
     _refresh(fresh, extractor or RecordedExtractor(state), to_iso(resolved), REBUILD_DELIVERY)
+    if extractor is None:
+        fresh.extraction_namespaces = {
+            document_id: namespace
+            for document_id, namespace in state.extraction_namespaces.items()
+            if fresh.extraction_signatures.get(document_id)
+            == state.extraction_signatures.get(document_id)
+        }
     fresh.last_event_at = to_iso(resolved)
     return fresh

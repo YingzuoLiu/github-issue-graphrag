@@ -4,12 +4,21 @@ import pytest
 from conftest import REPO, issue_payload, make_event, pull_payload
 
 from issue_graphrag.live.events import EventLog
+from issue_graphrag.live.extraction import LLMExtractor
 from issue_graphrag.live.inbox import DeliveryInbox
 from issue_graphrag.live.indexer import NullExtractor
-from issue_graphrag.models import ExtractionResult
+from issue_graphrag.live.models import LiveState, RepoItem
 from issue_graphrag.live.processor import DeliveryProcessor, ProcessingResult, run_worker_loop
 from issue_graphrag.live.repositories import read_freshness
-from issue_graphrag.live.store import read_state
+from issue_graphrag.live.semantic_operations import (
+    BatchPolicy,
+    ExtractionCache,
+    QuotaLedger,
+    SemanticBatchRunner,
+)
+from issue_graphrag.live.store import read_state, write_state
+from issue_graphrag.llm.client import CompletionMetadata, StructuredCompletion
+from issue_graphrag.models import ExtractionResult
 
 NOW = "2024-06-01T10:00:00Z"
 
@@ -53,6 +62,15 @@ class CountingExtractor:
     def extract(self, text_units):  # noqa: ANN001
         self.calls += 1
         return ExtractionResult()
+
+
+class FailingExtractor:
+    def __init__(self):
+        self.calls = 0
+
+    def extract(self, text_units):  # noqa: ANN001
+        self.calls += 1
+        raise RuntimeError("semantic provider unavailable")
 
 
 class FailOnceEventLog(EventLog):
@@ -171,6 +189,148 @@ def test_github_only_mode_leaves_changed_text_pending_for_a_future_extractor(tmp
     assert f"{REPO}#issue-7" not in state.extraction_signatures
     freshness = read_freshness(tmp_path / "freshness.json", REPO)
     assert freshness.semantic_status == "pending"
+
+
+def test_source_delivery_commits_before_semantic_work_runs(tmp_path):
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    event = make_event(
+        "delivery-1",
+        "issues",
+        {"action": "opened", "issue": issue_payload(7, body="extract later")},
+        NOW,
+    )
+    inbox.enqueue(event, now=NOW)
+    extractor = FailingExtractor()
+    processor = _processor(tmp_path, inbox, extractor=extractor)
+
+    source = processor.process_one(now=NOW)
+
+    assert source is not None and source.status == "succeeded"
+    assert source.work_type == "delivery"
+    assert extractor.calls == 0
+    assert inbox.get("delivery-1").status == "succeeded"  # type: ignore[union-attr]
+    assert EventLog(tmp_path / "events.jsonl").delivery_ids() == {"delivery-1"}
+    state = read_state(tmp_path / "live_state.json")
+    assert state.has_delivery("delivery-1")
+    assert any(fact.origin == "github" for fact in state.valid_facts())
+
+    semantic = processor.process_one(now=NOW)
+
+    assert semantic is not None and semantic.status == "deferred"
+    assert semantic.work_type == "semantic"
+    assert extractor.calls == 1
+    assert inbox.get("delivery-1").status == "succeeded"  # type: ignore[union-attr]
+    degraded = read_freshness(tmp_path / "freshness.json", REPO)
+    assert degraded.semantic_status == "degraded"
+    assert degraded.last_error and "provider unavailable" in degraded.last_error
+
+    # Platform observations continue while the provider is down, but they do
+    # not mislabel the still-unresolved semantic incident as merely pending.
+    later = "2024-06-01T10:00:01Z"
+    inbox.enqueue(
+        make_event(
+            "delivery-2",
+            "issues",
+            {"action": "opened", "issue": issue_payload(8, body="another issue")},
+            later,
+        ),
+        now=later,
+    )
+    continued = processor.process_one(now=later)
+    assert continued is not None and continued.work_type == "delivery"
+    still_degraded = read_freshness(tmp_path / "freshness.json", REPO)
+    assert still_degraded.semantic_status == "degraded"
+    assert still_degraded.last_error == degraded.last_error
+
+
+def test_idle_worker_materializes_bootstrap_pending_state_into_durable_work(tmp_path):
+    item = RepoItem(
+        kind="issue",
+        repo=REPO,
+        number=7,
+        title="Issue 7",
+        body="bootstrap semantics",
+        effective_at=NOW,
+        source_delivery_id="seed",
+    )
+    state = LiveState(repo=REPO, items={item.document_id: item}, last_event_at=NOW)
+    write_state(tmp_path / "live_state.json", state)
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    extractor = CountingExtractor()
+
+    result = _processor(tmp_path, inbox, extractor=extractor).process_one(now=NOW)
+
+    assert result is not None and result.status == "succeeded"
+    assert result.work_type == "semantic"
+    assert extractor.calls == 1
+    restored = read_state(tmp_path / "live_state.json")
+    assert restored.extraction_signatures[item.document_id] == item.extraction_signature()
+    assert inbox.count_semantic_jobs() == 0
+
+
+def test_deferred_semantics_preserve_last_good_facts_and_resume_after_restart(
+    tmp_path,
+    extractor,
+):
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    opened = make_event(
+        "delivery-1",
+        "issues",
+        {"action": "opened", "issue": issue_payload(7, body="RRF is proposed")},
+        NOW,
+    )
+    inbox.enqueue(opened, now=NOW)
+    initial = _processor(tmp_path, inbox, extractor=extractor)
+    assert initial.process_one(now=NOW).status == "succeeded"  # type: ignore[union-attr]
+    assert initial.process_one(now=NOW).status == "succeeded"  # type: ignore[union-attr]
+
+    before = read_state(tmp_path / "live_state.json")
+    document_id = f"{REPO}#issue-7"
+    old_signature = before.extraction_signatures[document_id]
+    old_facts = [fact.model_dump() for fact in before.document_facts(document_id, "llm")]
+    assert old_facts
+
+    edited_at = "2024-06-01T10:00:01Z"
+    edited = make_event(
+        "delivery-2",
+        "issues",
+        {
+            "action": "edited",
+            "issue": issue_payload(
+                7,
+                title="Issue 7 updated",
+                body="RRF is proposed with more context",
+                updated_at=edited_at,
+            ),
+        },
+        edited_at,
+    )
+    inbox.enqueue(edited, now=edited_at)
+    failing_extractor = FailingExtractor()
+    failing = _processor(tmp_path, inbox, extractor=failing_extractor)
+
+    source = failing.process_one(now=edited_at)
+    deferred = failing.process_one(now=edited_at)
+
+    assert source is not None and source.status == "succeeded"
+    assert deferred is not None and deferred.status == "deferred"
+    after_failure = read_state(tmp_path / "live_state.json")
+    assert after_failure.items[document_id].title == "Issue 7 updated"
+    assert after_failure.extraction_signatures[document_id] == old_signature
+    assert [fact.model_dump() for fact in after_failure.document_facts(document_id, "llm")] == old_facts
+    assert inbox.get("delivery-2").status == "succeeded"  # type: ignore[union-attr]
+
+    resumed = _processor(tmp_path, DeliveryInbox(tmp_path / "inbox.sqlite"), extractor=extractor)
+    completed = resumed.process_one(now=edited_at)
+
+    assert completed is not None and completed.status == "succeeded"
+    assert completed.work_type == "semantic"
+    restored = read_state(tmp_path / "live_state.json")
+    assert restored.extraction_signatures[document_id] == restored.items[
+        document_id
+    ].extraction_signature()
+    assert restored.extraction_signatures[document_id] != old_signature
+    assert DeliveryInbox(tmp_path / "inbox.sqlite").count_semantic_jobs() == 0
 
 
 def test_dependency_webhooks_hydrate_active_count_and_clear_blocked_status(tmp_path):
@@ -312,6 +472,9 @@ def test_crash_after_state_write_recovers_without_duplicate_extraction_or_log(tm
 
     second = processor.process_one(now=NOW)
     assert second is not None and second.status == "succeeded"
+    third = processor.process_one(now=NOW)
+    assert third is not None and third.status == "succeeded"
+    assert third.work_type == "semantic"
     assert extractor.calls == 1
     assert EventLog(tmp_path / "events.jsonl").delivery_ids() == {"delivery-1"}
     assert EventLog(tmp_path / "events.jsonl").read_all()[0].indexed_at == indexed_at
@@ -373,3 +536,179 @@ def test_worker_loop_survives_an_iteration_failure_and_keeps_processing():
     assert [result.delivery_id for result in results] == ["delivery-2"]
     assert [str(error) for error in errors] == ["temporary sqlite failure"]
     assert sleeps == [1.0]
+
+
+def test_partial_operational_batches_publish_nothing_until_document_is_complete(tmp_path):
+    class StructuredClient:
+        model = "google/gemini-3.1-flash-lite"
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete_structured(self, prompt, **kwargs):  # noqa: ANN001
+            self.calls += 1
+            return StructuredCompletion(
+                content=(
+                    '{"entities":[{"name":"Graph RAG","type":"FEATURE",'
+                    '"description":"mentioned in this unit"}],"relationships":[]}'
+                ),
+                metadata=CompletionMetadata(
+                    self.model,
+                    self.model,
+                    "Google",
+                    f"gen-{self.calls}",
+                    100,
+                    20,
+                    0.0001,
+                ),
+            )
+
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite")
+    body = "Graph RAG needs durable extraction. " * 180
+    event = make_event(
+        "delivery-long",
+        "issues",
+        {"action": "opened", "issue": issue_payload(7, body=body)},
+        NOW,
+    )
+    inbox.enqueue(event, now=NOW)
+    client = StructuredClient()
+    extractor = LLMExtractor(client)
+    batch_runner = SemanticBatchRunner(
+        repo=REPO,
+        extractor=extractor,
+        cache=ExtractionCache(tmp_path / "extraction_cache.sqlite"),
+        quota=QuotaLedger(tmp_path / "llm_operations.sqlite"),
+        batch_policy=BatchPolicy(
+            max_calls=1,
+            max_input_tokens=100_000,
+            max_output_tokens=10_000,
+            max_output_tokens_per_call=800,
+        ),
+    )
+    processor = DeliveryProcessor(
+        repo=REPO,
+        inbox=inbox,
+        state_path=tmp_path / "live_state.json",
+        event_log=EventLog(tmp_path / "events.jsonl"),
+        extractor=extractor,
+        lease_seconds=30,
+        retry_delay_seconds=0,
+        freshness_path=tmp_path / "freshness.json",
+        semantic_runner=batch_runner,
+    )
+
+    source = processor.process_one(now=NOW)
+    partial = processor.process_one(now=NOW)
+
+    assert source is not None and source.work_type == "delivery" and source.status == "succeeded"
+    assert partial is not None and partial.work_type == "semantic" and partial.status == "deferred"
+    state = read_state(tmp_path / "live_state.json")
+    document_id = f"{REPO}#issue-7"
+    assert document_id not in state.extraction_signatures
+    assert not [fact for fact in state.facts if fact.origin == "llm"]
+    job = inbox.get_semantic_job(document_id)
+    assert job is not None and job.next_unit_index == 1
+
+    while inbox.count_semantic_jobs():
+        processor.process_one(now=NOW)
+
+    completed = read_state(tmp_path / "live_state.json")
+    assert completed.extraction_signatures[document_id] == completed.items[
+        document_id
+    ].extraction_signature()
+    assert [fact for fact in completed.facts if fact.origin == "llm"]
+    assert client.calls > 1
+
+
+@pytest.mark.parametrize("change", ["model", "max_output_tokens"])
+def test_operational_namespace_change_reextracts_unchanged_document(tmp_path, change):
+    class StructuredClient:
+        def __init__(self, model):  # noqa: ANN001
+            self.model = model
+            self.calls = 0
+
+        def complete_structured(self, prompt, **kwargs):  # noqa: ANN001
+            self.calls += 1
+            return StructuredCompletion(
+                content=(
+                    '{"entities":[{"name":"Namespace result","type":"FEATURE",'
+                    '"description":"grounded"}],"relationships":[]}'
+                ),
+                metadata=CompletionMetadata(
+                    self.model,
+                    self.model,
+                    "Google",
+                    f"gen-{self.calls}",
+                    20,
+                    5,
+                    0.00001,
+                ),
+            )
+
+    def operational_processor(client, max_output_tokens):  # noqa: ANN001
+        extractor = LLMExtractor(client)
+        semantic_runner = SemanticBatchRunner(
+            repo=REPO,
+            extractor=extractor,
+            cache=ExtractionCache(tmp_path / "extraction_cache.sqlite"),
+            quota=QuotaLedger(tmp_path / "llm_operations.sqlite"),
+            batch_policy=BatchPolicy(
+                max_calls=12,
+                max_input_tokens=100_000,
+                max_output_tokens=100_000,
+                max_output_tokens_per_call=max_output_tokens,
+            ),
+        )
+        return (
+            DeliveryProcessor(
+                repo=REPO,
+                inbox=DeliveryInbox(tmp_path / "inbox.sqlite"),
+                state_path=tmp_path / "live_state.json",
+                event_log=EventLog(tmp_path / "events.jsonl"),
+                extractor=extractor,
+                freshness_path=tmp_path / "freshness.json",
+                retry_delay_seconds=0,
+                semantic_runner=semantic_runner,
+            ),
+            semantic_runner,
+        )
+
+    item = RepoItem(
+        kind="issue",
+        repo=REPO,
+        number=7,
+        title="Issue 7",
+        body="unchanged semantic input",
+        effective_at=NOW,
+        source_delivery_id="seed",
+    )
+    write_state(
+        tmp_path / "live_state.json",
+        LiveState(repo=REPO, items={item.document_id: item}, last_event_at=NOW),
+    )
+    first_client = StructuredClient("model-a")
+    first_processor, first_runner = operational_processor(first_client, 800)
+    first = first_processor.process_one(now=NOW)
+    assert first is not None and first.status == "succeeded"
+    first_state = read_state(tmp_path / "live_state.json")
+    assert first_state.extraction_namespaces[item.document_id] == (
+        first_runner.semantic_namespace
+    )
+
+    second_client = StructuredClient("model-b" if change == "model" else "model-a")
+    second_processor, second_runner = operational_processor(
+        second_client,
+        801 if change == "max_output_tokens" else 800,
+    )
+    assert second_runner.semantic_namespace != first_runner.semantic_namespace
+
+    second = second_processor.process_one(now="2024-06-01T10:00:01Z")
+
+    assert second is not None and second.status == "succeeded"
+    assert second_client.calls == 1
+    final_state = read_state(tmp_path / "live_state.json")
+    assert final_state.extraction_signatures[item.document_id] == item.extraction_signature()
+    assert final_state.extraction_namespaces[item.document_id] == (
+        second_runner.semantic_namespace
+    )

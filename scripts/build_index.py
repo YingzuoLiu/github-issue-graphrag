@@ -18,7 +18,7 @@ from issue_graphrag.storage.json_store import read_json, write_graph, write_json
 
 def make_llm():
     settings = load_settings()
-    if settings.llm_provider == "openai-compatible":
+    if settings.llm_provider in {"openrouter", "openai-compatible"}:
         if not settings.llm_base_url or not settings.llm_api_key or not settings.llm_model:
             raise ValueError("LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL are required")
         return OpenAICompatibleClient(settings.llm_base_url, settings.llm_api_key, settings.llm_model)

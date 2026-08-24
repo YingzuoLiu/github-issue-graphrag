@@ -4,6 +4,9 @@ from issue_graphrag.chunker import documents_to_text_units
 from issue_graphrag.live.models import LiveState, RepoItem
 from issue_graphrag.models import SourceDocument, TextUnit
 
+LIVE_CHUNK_MAX_CHARS = 2500
+LIVE_CHUNK_OVERLAP = 250
+
 
 def to_source_document(item: RepoItem) -> SourceDocument:
     """Render one issue or pull request as a single grounding document."""
@@ -27,7 +30,11 @@ def to_source_document(item: RepoItem) -> SourceDocument:
 
 
 def text_units_for(item: RepoItem) -> list[TextUnit]:
-    return documents_to_text_units([to_source_document(item)])
+    return documents_to_text_units(
+        [to_source_document(item)],
+        max_chars=LIVE_CHUNK_MAX_CHARS,
+        overlap=LIVE_CHUNK_OVERLAP,
+    )
 
 
 def all_text_units(state: LiveState) -> list[TextUnit]:
@@ -35,4 +42,3 @@ def all_text_units(state: LiveState) -> list[TextUnit]:
     for document_id in sorted(state.items):
         units.extend(text_units_for(state.items[document_id]))
     return units
-

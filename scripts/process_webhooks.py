@@ -12,11 +12,23 @@ from issue_graphrag.live.github_api import GitHubClient
 from issue_graphrag.live.inbox import DeliveryInbox
 from issue_graphrag.live.processor import DeliveryProcessor, ProcessingResult, run_worker_loop
 from issue_graphrag.live.repositories import RepoRegistry, repo_paths
-from issue_graphrag.live.runtime import configured_extractor
+from issue_graphrag.live.runtime import configured_extractor, validate_openrouter_operations
+from issue_graphrag.live.extraction import LLMExtractor
+from issue_graphrag.live.semantic_operations import (
+    BatchPolicy,
+    ExtractionCache,
+    QuotaLedger,
+    QuotaPolicy,
+    SemanticBatchRunner,
+)
 from issue_graphrag.live.timeutil import now_utc, to_iso
 
 
 def _print_result(result: ProcessingResult) -> None:
+    if result.work_type == "semantic":
+        suffix = f": {result.error}" if result.error else ""
+        print(f"[semantic {result.document_id}] {result.status}{suffix}")
+        return
     if result.status == "succeeded" and result.delta is not None:
         delta = result.delta
         changed = len(delta.fact_changes)
@@ -88,24 +100,83 @@ def main() -> None:
                 f"  [{delivery.event.delivery_id}] attempts={delivery.attempts} "
                 f"{delivery.last_error or '(no error recorded)'}"
             )
+        semantic_jobs = inbox.list_semantic_jobs(limit=100)
+        print(f"  semantic: {len(semantic_jobs)} pending/deferred documents")
+        for job in semantic_jobs:
+            suffix = f" ({job.last_error})" if job.last_error else ""
+            print(
+                f"    [{job.document_id}] {job.status} "
+                f"unit={job.next_unit_index}/{job.total_units}{suffix}"
+            )
+        print(
+            "     cache: "
+            f"{ExtractionCache(repo_storage.extraction_cache).count()} validated text units"
+        )
+        quota_summary = QuotaLedger(
+            settings.repo_data_dir / "llm_operations.sqlite"
+        ).usage_summary(to_iso(now_utc()))
+        print(
+            f"     quota: {quota_summary.daily_calls} calls, "
+            f"{quota_summary.daily_input_tokens} input, "
+            f"{quota_summary.daily_output_tokens} output on {quota_summary.utc_day}; "
+            f"${quota_summary.monthly_cost_usd:.6f} in {quota_summary.utc_month}; "
+            f"states={quota_summary.request_states or {'requests': 0}}"
+        )
         return
 
     if args.retry_failed:
         count = inbox.retry_failed(to_iso(now_utc()))
         print(f"Requeued {count} failed deliveries")
 
+    extractor = configured_extractor(rules=args.rules, use_llm=args.llm, operational=args.llm)
+    semantic_runner = None
+    if args.llm:
+        try:
+            validate_openrouter_operations(settings)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if not isinstance(extractor, LLMExtractor):
+            raise RuntimeError("live LLM configuration did not produce an LLM extractor")
+        semantic_runner = SemanticBatchRunner(
+            repo=repo,
+            extractor=extractor,
+            cache=ExtractionCache(repo_storage.extraction_cache),
+            quota=QuotaLedger(
+                settings.repo_data_dir / "llm_operations.sqlite",
+                QuotaPolicy(
+                    daily_calls=settings.llm_daily_calls,
+                    daily_input_tokens=settings.llm_daily_input_tokens,
+                    daily_output_tokens=settings.llm_daily_output_tokens,
+                    monthly_cost_usd=settings.llm_monthly_cost_usd,
+                    bootstrap_calls=settings.llm_bootstrap_calls,
+                    bootstrap_input_tokens=settings.llm_bootstrap_input_tokens,
+                    bootstrap_output_tokens=settings.llm_bootstrap_output_tokens,
+                    input_price_per_million_usd=settings.llm_input_price_per_million_usd,
+                    output_price_per_million_usd=settings.llm_output_price_per_million_usd,
+                    cost_safety_multiplier=settings.llm_cost_safety_multiplier,
+                ),
+            ),
+            batch_policy=BatchPolicy(
+                max_calls=settings.llm_batch_calls,
+                max_input_tokens=settings.llm_batch_input_tokens,
+                max_output_tokens=settings.llm_batch_output_tokens,
+                max_output_tokens_per_call=settings.llm_max_output_tokens_per_call,
+            ),
+        )
+
     processor = DeliveryProcessor(
         repo=repo,
         inbox=inbox,
         state_path=state_path,
         event_log=EventLog(log_path),
-        extractor=configured_extractor(rules=args.rules, use_llm=args.llm),
+        extractor=extractor,
         github=GitHubClient(token=settings.github_token),
         hydrate_pull_request_files=not args.no_pr_files,
         lease_seconds=args.lease_seconds,
         retry_delay_seconds=args.retry_delay_seconds,
         max_attempts=args.max_attempts,
         freshness_path=repo_storage.freshness,
+        semantic_runner=semantic_runner,
     )
 
     if args.once:

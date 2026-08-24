@@ -30,6 +30,7 @@ case-normalized and mapped to paths without accepting traversal components:
 ```text
 data/repos/
   repositories.json
+  llm_operations.sqlite
   owner__name/
     bootstrap_seed.json
     inbox.db
@@ -39,8 +40,16 @@ data/repos/
     freshness.json
 ```
 
-The inbox, state and event log are never shared between repositories. One receiver/worker pair
-still owns one repository lane; start another pair for another repository.
+The inbox, state, event log and extraction results are never shared between repositories. One
+receiver/worker pair still owns one repository lane; start another pair for another repository.
+`llm_operations.sqlite` is deliberately shared: it contains only provider request reservations and
+actual usage metadata, and serializes the all-repository daily/monthly hard caps. Every ledger row
+is repo-qualified; it contains no extracted result or source text. Reservations are marked
+dispatched before the provider boundary. Expired undispatched rows are released; expired dispatched
+rows become conservative `unknown` outcomes. Incomplete provider usage keeps the reservation's
+token and cost estimates, so missing metadata cannot make a hard cap fail open. Orphan reconciliation
+has its own committed transaction before admission, and the status view reconciles before reading;
+a rejected reservation therefore cannot roll back the operator-visible terminal state.
 
 ## Bounded bootstrap
 
@@ -82,9 +91,14 @@ Each lane's `freshness.json` reports separate source and semantic clocks:
 | `semantic_updated_at` | Time the semantic status was last updated |
 | `last_error` | Most recent lane-local processing error |
 
-Fetching a seed marks semantic work `pending`. A successful replay or webhook commit marks it
-`current`; a failed extractor marks only that repository `degraded`. The Streamlit live tab shows
-these fields next to the repository selector.
+Fetching a seed marks semantic work `pending`. Deterministic replay can commit immediately; an
+LLM-enabled worker later materializes one durable semantic job per changed document. Only a fully
+cached and validated document marks its extraction signature current. Provider/quota failure marks
+only that repository `degraded`, preserves last-good semantic facts and leaves the job resumable.
+Operational freshness also records the extraction namespace. Model, prompt, schema, strict request,
+per-call output or live chunk-policy changes therefore queue unchanged documents into the new
+namespace instead of leaving old facts marked current.
+The Streamlit live tab shows these fields next to the repository selector.
 
 Use the repository-qualified CLI paths when more than one repository is registered:
 
@@ -93,5 +107,6 @@ python scripts/contribution_report.py --repo owner/name
 python scripts/process_webhooks.py --repo owner/name --status
 ```
 
-`--status` is read-only with respect to the repository registry. Processing failures and retry
-queues remain local to their lane, so a degraded repository does not block a healthy one.
+`--status` is read-only with respect to the repository registry and reports delivery failures,
+semantic cursors, validated cache units and global ledger request states. Processing failures and
+retry queues remain local to their lane, so a degraded repository does not block a healthy one.
