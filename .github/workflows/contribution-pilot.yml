@@ -30,11 +30,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/run_real_repo_pilot.py
+      - name: Run scheduled Graphiti reconciliation probe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOS: getzep/graphiti
+          REPO_DATA_DIR: eval/sync_probe/data
+        run: >-
+          python scripts/sync_repositories.py getzep/graphiti --once
+          --item-limit 10 --comment-limit-per-item 50
+          --file-limit-per-pull 300 --dependency-limit-per-issue 100
+          --json-output eval/sync_probe/result.json
       - name: Upload timestamped pilot report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: contribution-pilot-${{ github.run_id }}
-          path: eval/pilot_runs/
+          path: |
+            eval/pilot_runs/
+            eval/sync_probe/result.json
           if-no-files-found: error
           retention-days: 30

@@ -1,4 +1,4 @@
-# Repository isolation and bounded bootstrap
+# Repository isolation, bounded bootstrap and scheduled reconciliation
 
 The live index keeps each repository in an independent local lane. This avoids the two failure
 modes of the earlier single-path prototype: one repository overwriting another's state, and one
@@ -37,11 +37,13 @@ data/repos/
     live_state.json
     event_log.jsonl
     extraction_cache.sqlite
+    sync_state.json
     freshness.json
 ```
 
-The inbox, state, event log and extraction results are never shared between repositories. One
-receiver/worker pair still owns one repository lane; start another pair for another repository.
+The inbox, state, event log, reconciliation checkpoint and extraction results are never shared
+between repositories. One receiver/worker pair still owns one repository lane; start another pair
+for another repository.
 `llm_operations.sqlite` is deliberately shared: it contains only provider request reservations and
 actual usage metadata, and serializes the all-repository daily/monthly hard caps. Every ledger row
 is repo-qualified; it contains no extracted result or source text. Reservations are marked
@@ -79,13 +81,55 @@ python scripts/replay_events.py \
   --events data/empty-events
 ```
 
+## Scheduled current-state reconciliation
+
+The M5 synchronizer is a deterministic source observer, not a second indexer and not an LLM path.
+It compares a bounded GitHub snapshot with the lane's last-good `sync_state.json`, gives each
+changed resource a stable `reconciliation-<sha256>` delivery id, and enqueues
+`source=reconciliation` events into the same durable inbox used by webhooks. The existing
+single-writer worker remains the only component that commits live state, facts and event history.
+
+Run one poll, inspect its checkpoint, or keep the fixed loop running:
+
+```bash
+python scripts/sync_repositories.py owner/name --once
+python scripts/sync_repositories.py owner/name --status
+python scripts/sync_repositories.py owner/name --loop --interval-seconds 900
+python scripts/process_webhooks.py --repo owner/name
+```
+
+A bounded page this poll could not read to its end is not an observation. A truncated
+`blocked_by` page never becomes a dependency count and a truncated file page never becomes a file
+set, so an operator-configured bound can never publish a blocked issue as available or narrow a
+pull request's modules; the previous value stays until a complete window replaces it. A first
+complete observation is delivered like any other, which is what repairs a `blocked_by_removed`
+webhook that never arrived.
+
+The default cadence is 15 minutes (`GITHUB_SYNC_INTERVAL_SECONDS=900`). Requests are serial,
+read-only and conditional when GitHub supplied `ETag` or `Last-Modified`; `X-Poll-Interval` may
+extend the cadence. Retryable network/5xx failures use bounded exponential backoff. Rate-limit
+responses do not sleep in-process: their `Retry-After` or `X-RateLimit-Reset` becomes the visible
+next attempt, with a positive one-minute fallback for stale or zero hints. A failed observation or
+partial enqueue never advances `sync_state.json`; the
+last-good snapshot remains available, freshness becomes `stale`, and a retry uses the same
+delivery ids. This converges current issue, pull request, comment, changed-file and dependency
+state, but deliberately does not reconstruct GitHub's missed webhook chronology.
+
 ## Freshness semantics
 
 Each lane's `freshness.json` reports separate source and semantic clocks:
 
 | Field | Meaning |
 |---|---|
-| `last_source_sync_at` | Last successful GitHub bootstrap fetch |
+| `last_source_sync_at` | Last successful bootstrap or scheduled observation |
+| `last_source_attempt_at` | Most recent source attempt, successful or failed |
+| `next_source_sync_at` | Earliest scheduled next observation |
+| `source_status` | `not_started`, `current` or `stale` |
+| `source_kind` | `bootstrap` or `scheduled_sync` |
+| `source_error` | Latest source-side failure while last-good state stays readable |
+| `last_source_requests` | GitHub GETs made by the latest successful scheduled observation |
+| `last_source_not_modified` | Conditional requests answered `304` in that observation |
+| `last_source_deliveries` | Reconciliation deliveries planned in that observation |
 | `last_state_commit_at` | Last atomic live-state write |
 | `semantic_status` | `not_started`, `pending`, `current` or `degraded` |
 | `semantic_updated_at` | Time the semantic status was last updated |

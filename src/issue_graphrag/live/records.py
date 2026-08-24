@@ -27,7 +27,13 @@ SUPPORTED_EVENT_ACTIONS: dict[str, frozenset[str] | None] = {
     "pull_request": None,
     "issue_comment": frozenset({"created", "edited", "deleted"}),
     "issue_dependencies": frozenset(
-        {"blocked_by_added", "blocked_by_removed", "blocking_added", "blocking_removed"}
+        {
+            "blocked_by_added",
+            "blocked_by_removed",
+            "blocking_added",
+            "blocking_removed",
+            "reconciled",
+        }
     ),
 }
 

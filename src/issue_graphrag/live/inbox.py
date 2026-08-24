@@ -67,7 +67,14 @@ class SemanticJob:
 
 
 def event_fingerprint(event: RepoEvent) -> str:
-    """Identity of GitHub's input, excluding local arrival and enrichment fields."""
+    """Identity of GitHub's input, excluding local arrival and enrichment fields.
+
+    This value is persisted per delivery, so its inputs are a durable contract:
+    rows written by an earlier version must still match. Local classification
+    such as ``source``, local arrival times and hydrated attachments therefore
+    stay out of it. Reconciliation delivery ids are namespaced instead, so two
+    observation lanes can never collide on one id.
+    """
     payload = {
         "event_type": event.event_type,
         "action": event.action,

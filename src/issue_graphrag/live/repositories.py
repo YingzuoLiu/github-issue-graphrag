@@ -44,6 +44,7 @@ class RepoPaths:
     inbox: Path
     bootstrap_seed: Path
     extraction_cache: Path
+    sync_state: Path
     freshness: Path
 
 
@@ -58,6 +59,7 @@ def repo_paths(root: Path, repo: str) -> RepoPaths:
         inbox=directory / "inbox.db",
         bootstrap_seed=directory / "bootstrap_seed.json",
         extraction_cache=directory / "extraction_cache.sqlite",
+        sync_state=directory / "sync_state.json",
         freshness=directory / "freshness.json",
     )
 
@@ -65,6 +67,15 @@ def repo_paths(root: Path, repo: str) -> RepoPaths:
 class RepoFreshness(BaseModel):
     repo: str
     last_source_sync_at: str | None = None
+    last_source_attempt_at: str | None = None
+    next_source_sync_at: str | None = None
+    source_status: Literal["not_started", "current", "stale"] = "not_started"
+    source_kind: Literal["bootstrap", "scheduled_sync"] | None = None
+    source_error: str | None = None
+    sync_interval_seconds: int | None = None
+    last_source_requests: int = 0
+    last_source_not_modified: int = 0
+    last_source_deliveries: int = 0
     last_state_commit_at: str | None = None
     semantic_status: Literal["not_started", "pending", "current", "degraded"] = "not_started"
     semantic_updated_at: str | None = None
@@ -109,6 +120,11 @@ def read_freshness(path: Path, repo: str) -> RepoFreshness:
 def write_freshness(path: Path, freshness: RepoFreshness) -> None:
     freshness.repo = canonical_repo(freshness.repo)
     _write_json(path, freshness.model_dump(mode="json"))
+
+
+def write_json_atomic(path: Path, payload: object) -> None:
+    """Persist one small repository control document without a torn replace."""
+    _write_json(path, payload)
 
 
 class RepoRegistry:

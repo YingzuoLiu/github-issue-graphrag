@@ -36,6 +36,7 @@ class Settings:
     vector_collection: str
     github_token: str | None
     github_repos: tuple[str, ...]
+    github_sync_interval_seconds: int
     github_webhook_repo: str | None
     github_webhook_secret: str | None
 
@@ -111,6 +112,9 @@ def load_settings(env_file: str | None = None) -> Settings:
         vector_collection=os.getenv("VECTOR_COLLECTION", "issue_graphrag"),
         github_token=os.getenv("GITHUB_TOKEN") or None,
         github_repos=configured_repos,
+        github_sync_interval_seconds=integer(
+            "GITHUB_SYNC_INTERVAL_SECONDS", 900, positive=True
+        ),
         github_webhook_repo=webhook_repo,
         github_webhook_secret=os.getenv("GITHUB_WEBHOOK_SECRET") or None,
     )
