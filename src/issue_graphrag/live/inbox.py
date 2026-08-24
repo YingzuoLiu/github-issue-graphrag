@@ -72,6 +72,7 @@ def event_fingerprint(event: RepoEvent) -> str:
         "event_type": event.event_type,
         "action": event.action,
         "repo": event.repo,
+        "source": event.source,
         "payload": event.payload,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

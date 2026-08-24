@@ -18,6 +18,14 @@ def test_repository_configuration_combines_selector_and_webhook_lane(monkeypatch
     assert settings.repo_data_dir == tmp_path / "repos"
 
 
+def test_scheduled_sync_interval_defaults_and_is_operator_configurable(monkeypatch):
+    monkeypatch.delenv("GITHUB_SYNC_INTERVAL_SECONDS", raising=False)
+    assert load_settings().github_sync_interval_seconds == 900
+
+    monkeypatch.setenv("GITHUB_SYNC_INTERVAL_SECONDS", "1200")
+    assert load_settings().github_sync_interval_seconds == 1200
+
+
 def test_m4_openrouter_defaults_and_limits_are_operator_configurable(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openrouter")
     monkeypatch.delenv("LLM_BASE_URL", raising=False)

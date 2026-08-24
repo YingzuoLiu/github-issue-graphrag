@@ -295,6 +295,10 @@ class RepoEvent(BaseModel):
     received_at: str
     payload: dict[str, Any] = Field(default_factory=dict)
     attachments: dict[str, Any] = Field(default_factory=dict)
+    #: Webhooks preserve GitHub's delivery chronology. Reconciliation events
+    #: are current-state observations made by the scheduled synchronizer and
+    #: must never be presented as if GitHub delivered them in real time.
+    source: Literal["webhook", "reconciliation"] = "webhook"
     #: When the index actually applied this delivery. Fact validity windows are
     #: keyed on this, not on ``received_at``, so out-of-order arrivals cannot
     #: open a validity window in the past.
@@ -302,6 +306,11 @@ class RepoEvent(BaseModel):
 
     def summary(self) -> str:
         return f"{self.event_type}.{self.action}"
+
+    def observation_label(self) -> str:
+        if self.source == "reconciliation":
+            return "Observed during scheduled sync"
+        return "Received via GitHub Webhook"
 
 
 class FactChange(BaseModel):

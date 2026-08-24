@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal, cast
 
 from issue_graphrag.live.models import RepoEvent
 from issue_graphrag.live.timeutil import max_iso, now_utc, to_iso
@@ -64,6 +64,10 @@ def normalize_envelope(envelope: dict[str, Any], default_repo: str | None = None
         received_at=to_iso(received_at) if received_at else to_iso(now_utc()),
         payload=payload,
         attachments=envelope.get("attachments") or {},
+        source=cast(
+            Literal["webhook", "reconciliation"],
+            str(envelope.get("source") or "webhook"),
+        ),
     )
 
 

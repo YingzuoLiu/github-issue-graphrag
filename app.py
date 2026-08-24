@@ -303,12 +303,23 @@ def render_live_tab() -> None:
     )
     if freshness_path is not None:
         freshness = read_freshness(freshness_path, state.repo)
+        source_cadence = (
+            f"{freshness.sync_interval_seconds} seconds"
+            if freshness.sync_interval_seconds is not None
+            else "not configured"
+        )
         st.caption(
-            "Freshness — source sync: "
-            f"`{freshness.last_source_sync_at or 'not recorded'}`; state commit: "
+            "Freshness — source: "
+            f"`{freshness.source_status}` via "
+            f"`{freshness.source_kind or 'not recorded'}` at "
+            f"`{freshness.last_source_sync_at or 'not recorded'}`; next attempt: "
+            f"`{freshness.next_source_sync_at or 'not scheduled'}`; cadence: "
+            f"`{source_cadence}`; state commit: "
             f"`{freshness.last_state_commit_at or 'not recorded'}`; semantic: "
             f"`{freshness.semantic_status}`."
         )
+        if freshness.source_error:
+            st.warning(f"Source data is stale: {freshness.source_error}")
     views = timeline(state, events)
     current = project_graph(state)
 
@@ -326,7 +337,8 @@ def render_live_tab() -> None:
         return
 
     options = ["Now (all events applied)"] + [
-        f"{index + 1}. {view.event.summary()} @ {view.after_moment}"
+        f"{index + 1}. {view.event.summary()} · {view.event.observation_label()} "
+        f"@ {view.after_moment}"
         for index, view in enumerate(views)
     ]
     choice = st.select_slider("Point in the event timeline", options=options, value=options[-1])
@@ -341,6 +353,7 @@ def render_live_tab() -> None:
     st.markdown(
         f"**Delivery `{event.delivery_id}` — {event.summary()}** indexed at "
         f"{view.after_moment}  \n"
+        f"{event.observation_label()}. "
         f"Affected the graph between `{view.before_moment}` and `{view.after_moment}`. "
         f"GitHub reported it at `{event.received_at}`."
     )

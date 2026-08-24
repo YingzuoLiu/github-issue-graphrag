@@ -11,9 +11,10 @@ The project has two halves:
 
 - **Batch GraphRAG index (v0.1, complete).** Turns a snapshot of GitHub issues into an entity
   graph with community reports, and answers contribution-oriented questions with grounded context.
-- **Live contribution graph (v0.3).** Receives signed GitHub webhooks through a durable inbox and
-  applies them to a versioned, ontology-checked fact store, so the graph updates incrementally and
-  can say how each event moved the recommendations. See
+- **Live contribution graph (v0.3, productization on `0.4.0.dev0`).** Receives signed GitHub
+  webhooks and deterministic scheduled observations through the same durable inbox, then applies
+  them to a versioned, ontology-checked fact store so the graph updates incrementally and can say
+  how each observation moved the recommendations. See
   [Live contribution graph](#live-contribution-graph-v03).
 
 The demo dataset is TrustGraph, but both halves work against any GitHub repository.
@@ -228,7 +229,8 @@ The Streamlit demo provides a small interface for selecting retrieval mode, runn
 | Time model | Immutable fact versions with `valid_from` / `valid_to`, so history stays queryable and historical projections never borrow later knowledge; source-clock record versioning, so stale, partial and out-of-order payloads all converge |
 | Correctness | An explicit ontology separating who may assert a predicate from whether the assertion is legal; a rebuild consistency check fingerprinting direction and provenance |
 | Cost control | Changed-document extraction, repo-local SQLite cache, cross-repository daily/monthly hard caps and resumable fair batches |
-| Output | Deterministic contribution scoring with per-signal reasons and source links, deterministic fixture replay, a configured repository selector, freshness metadata and a Streamlit timeline of the affected subgraph |
+| Source convergence | A 15-minute configurable, read-only synchronizer uses HTTP validators, bounded retries and deterministic reconciliation deliveries through the existing repository inbox/single writer |
+| Output | Deterministic contribution scoring with per-signal reasons and source links, deterministic fixture replay, a configured repository selector, freshness/staleness metadata and a Streamlit timeline that distinguishes webhook delivery from scheduled observation |
 
 ## Setup
 
@@ -745,11 +747,40 @@ retention window. See GitHub's
 [webhook best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)
 and [redelivery documentation](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks).
 
+### Run scheduled reconciliation
+
+The deterministic M5 synchronizer closes the current-state gap left by a missed webhook without
+pretending to recover that webhook's chronology. It polls only the configured repository, stores
+conditional-request validators and a last-good checkpoint for each bounded observation in the
+repository lane, and
+turns each changed issue, pull request, comment or dependency observation into one stable
+`source=reconciliation` delivery. Those deliveries enter the same SQLite inbox and single-writer
+worker as signed webhooks; semantic extraction remains a separate durable worker job.
+
+```bash
+# one bounded observation (getzep/graphiti is the CLI default)
+python scripts/sync_repositories.py getzep/graphiti --once
+
+# prove an unchanged second observation produces no deliveries
+python scripts/sync_repositories.py getzep/graphiti --once --expect-noop
+
+# run the configured 15-minute loop and inspect visible freshness/checkpoint state
+python scripts/sync_repositories.py getzep/graphiti --loop
+python scripts/sync_repositories.py getzep/graphiti --status
+```
+
+Set `GITHUB_SYNC_INTERVAL_SECONDS` to change the 900-second default. GitHub's
+`X-Poll-Interval` can extend it. A rate-limit reset becomes the next attempt time without blocking
+the process; network and server failures receive bounded retries. Any incomplete fetch or enqueue
+leaves the previous checkpoint intact and marks source freshness stale. See
+[`docs/repository-isolation.md`](docs/repository-isolation.md) for the checkpoint, bounds and
+failure semantics.
+
 ### What v0.3 deliberately does not do
 
-- It does not yet authenticate as a GitHub App and poll the delivery-history API for missed
-  deliveries. Local processing retries are automatic; source-side backfill remains an explicit
-  operator action.
+- It does not yet authenticate as a GitHub App or reconstruct missed delivery chronology. The
+  scheduled synchronizer converges the bounded current state; exact historical delivery recovery
+  remains an operator action through GitHub's delivery UI/API.
 - The inbox gives at-least-once processing, not exactly-once model billing. A crash before the
   provider response reaches the persistent cache can still leave an unknowable billable attempt.
   It is conservatively reserved in the quota ledger. Once a validated response is cached, a crash
@@ -1004,6 +1035,7 @@ src/issue_graphrag/
     server.py            # HTTP endpoint; verifies and enqueues only
     inbox.py             # durable SQLite leases, retry and dead letters
     github_api.py        # paginated pull-request file hydration
+    synchronizer.py      # conditional snapshot diff -> reconciliation deliveries
     processor.py         # inbox -> atomic state + append-once audit log
     repositories.py      # per-repository paths, registry and freshness metadata
     runtime.py           # shared deterministic/rules/LLM extractor setup
@@ -1031,6 +1063,7 @@ scripts/
   query.py
   replay_events.py
   serve_webhooks.py
+  sync_repositories.py
   process_webhooks.py
   contribution_report.py
 
@@ -1126,7 +1159,8 @@ This project demonstrates:
   completes bounded bootstrap pagination and exposes per-repository freshness. M3 carries locked
   and native dependency signals through versioned GitHub facts into deterministic scoring. M4
   makes live extraction deterministic-first, cached, quota-bounded, resumable and atomically
-  published.
+  published. M5 adds deterministic scheduled current-state reconciliation through the existing
+  durable inbox and single-writer lane, with conditional requests and visible source staleness.
 
 ## Future work
 

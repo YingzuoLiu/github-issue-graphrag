@@ -73,6 +73,10 @@ def main() -> None:
 
     freshness = read_freshness(repo_storage.freshness, repo_storage.repo)
     freshness.last_source_sync_at = fetched_at
+    freshness.last_source_attempt_at = fetched_at
+    freshness.source_status = "current"
+    freshness.source_kind = "bootstrap"
+    freshness.source_error = None
     freshness.semantic_status = "pending"
     freshness.last_error = None
     write_freshness(repo_storage.freshness, freshness)

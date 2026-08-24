@@ -100,6 +100,8 @@ def test_normalize_envelope_derives_the_timestamp_from_the_payload():
     )
 
     assert event.received_at == "2024-05-02T10:30:00Z"
+    assert event.source == "webhook"
+    assert event.observation_label() == "Received via GitHub Webhook"
 
 
 def test_event_log_round_trips_and_reports_delivery_ids(tmp_path):
