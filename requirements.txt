@@ -11,7 +11,7 @@ rank-bm25>=0.2.2
 tqdm>=4.66
 
 # Streamlit demo -- the ".[app]" extra
-streamlit>=1.32
+streamlit>=1.56
 
 # Optional vector index -- the ".[embeddings,vector]" extras
 # sentence-transformers>=2.7
