@@ -29,7 +29,7 @@ RADAR_ANALYTICS_SOURCES = {
     "radar_viewed": frozenset({"radar_page"}),
     "opportunity_opened": frozenset({"radar_card", "recently_changed"}),
     "evidence_opened": frozenset({"issue_detail"}),
-    "github_opened": frozenset({"issue_detail"}),
+    "github_opened": frozenset({"radar_card", "issue_detail"}),
 }
 _ANONYMOUS_SESSION = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 

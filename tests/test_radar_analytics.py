@@ -90,3 +90,26 @@ def test_analytics_failure_never_interrupts_the_product_path(tmp_path):
     )
 
     assert recorded is False
+
+
+def test_github_opened_accepts_only_real_outbound_surfaces(tmp_path):
+    analytics = RadarAnalytics(tmp_path / "radar.sqlite")
+
+    for source in ("radar_card", "issue_detail"):
+        analytics.record(
+            event_name="github_opened",
+            anonymous_session="anonymous-random-token",
+            repo="owner/repo",
+            issue_number=7,
+            occurred_at="2026-08-24T02:00:00Z",
+            ui_source=source,
+        )
+
+    with sqlite3.connect(tmp_path / "radar.sqlite") as connection:
+        sources = [
+            row[0]
+            for row in connection.execute(
+                "SELECT ui_source FROM radar_events WHERE event_name = 'github_opened' ORDER BY id"
+            ).fetchall()
+        ]
+    assert sources == ["radar_card", "issue_detail"]

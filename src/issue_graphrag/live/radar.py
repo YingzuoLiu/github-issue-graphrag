@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -26,10 +28,12 @@ from issue_graphrag.live.repositories import (
     read_freshness,
 )
 from issue_graphrag.live.store import read_state
+from issue_graphrag.live.timeutil import now_utc, parse_iso, to_iso
 
 RadarOrigin = Literal["github", "inference"]
 HistoryStatus = Literal["current", "not_started", "partial", "unavailable"]
 CoverageStatus = Literal["bounded", "unknown", "unavailable"]
+InboxStatus = Literal["clear", "pending", "degraded", "unknown", "unavailable"]
 
 STATUS_LABELS = {
     "available": "Ready",
@@ -167,28 +171,89 @@ class RadarHistory:
 
 
 @dataclass(frozen=True)
+class RadarInboxStatus:
+    """Read-only queue health used to qualify persisted snapshot currentness."""
+
+    status: InboxStatus
+    pending_deliveries: int = 0
+    processing_deliveries: int = 0
+    failed_deliveries: int = 0
+    pending_semantic_jobs: int = 0
+    processing_semantic_jobs: int = 0
+    deferred_semantic_jobs: int = 0
+    message: str | None = None
+
+    @property
+    def active_deliveries(self) -> int:
+        return self.pending_deliveries + self.processing_deliveries
+
+    @property
+    def active_semantic_jobs(self) -> int:
+        return (
+            self.pending_semantic_jobs
+            + self.processing_semantic_jobs
+            + self.deferred_semantic_jobs
+        )
+
+
+@dataclass(frozen=True)
 class RadarSnapshot:
     repo: str
     issues: tuple[RadarIssue, ...]
     recent_changes: tuple[RadarChange, ...]
     freshness: RepoFreshness
     coverage: RadarCoverage
+    inbox: RadarInboxStatus
+    evaluated_at: str
     history_status: HistoryStatus
     history_message: str | None = None
 
     @property
-    def source_current_is_confirmed(self) -> bool:
+    def source_schedule_overdue(self) -> bool:
+        if self.freshness.source_kind != "scheduled_sync":
+            return False
+        try:
+            return parse_iso(self.freshness.next_source_sync_at or "") <= parse_iso(
+                self.evaluated_at
+            )
+        except ValueError:
+            return False
+
+    @property
+    def source_observation_current_is_confirmed(self) -> bool:
+        try:
+            parse_iso(self.freshness.last_source_sync_at or "")
+            if self.freshness.source_kind == "scheduled_sync":
+                next_sync = parse_iso(self.freshness.next_source_sync_at or "")
+                if next_sync <= parse_iso(self.evaluated_at):
+                    return False
+        except ValueError:
+            return False
         return (
             self.freshness.source_status == "current"
             and self.freshness.source_kind is not None
-            and self.freshness.last_source_sync_at is not None
         )
 
     @property
+    def source_current_is_confirmed(self) -> bool:
+        try:
+            parse_iso(self.freshness.last_state_commit_at or "")
+        except ValueError:
+            return False
+        return self.source_observation_current_is_confirmed and self.inbox.status == "clear"
+
+    @property
     def semantic_current_is_confirmed(self) -> bool:
+        try:
+            semantic_updated = parse_iso(self.freshness.semantic_updated_at or "")
+            state_committed = parse_iso(self.freshness.last_state_commit_at or "")
+        except ValueError:
+            return False
         return (
-            self.freshness.semantic_status == "current"
-            and self.freshness.semantic_updated_at is not None
+            self.source_current_is_confirmed
+            and self.freshness.semantic_status == "current"
+            and semantic_updated >= state_committed
+            and self.inbox.active_semantic_jobs == 0
         )
 
     @property
@@ -483,10 +548,24 @@ def _build_issue(
     )
 
 
-def read_event_snapshot(path: Path, repo: str) -> RadarHistory:
+def read_event_snapshot(
+    path: Path,
+    repo: str,
+    expected_delivery_ids: tuple[str, ...] | list[str] | None = None,
+) -> RadarHistory:
     """Read complete JSONL records without repairing or otherwise writing the log."""
     normalized = canonical_repo(repo)
+    expected = set(expected_delivery_ids or ())
     if not path.exists():
+        if expected:
+            missing = ", ".join(sorted(expected)[:3])
+            return RadarHistory(
+                status="partial",
+                message=(
+                    "Event history is missing deliveries already committed to state "
+                    f"({missing}); current facts remain usable, but history is incomplete."
+                ),
+            )
         return RadarHistory(status="not_started", message="No event history has been recorded yet.")
 
     try:
@@ -516,17 +595,55 @@ def read_event_snapshot(path: Path, repo: str) -> RadarHistory:
             message=f"Event history is invalid ({type(exc).__name__}); current facts remain usable.",
         )
 
+    messages: list[str] = []
     if partial_tail:
+        messages.append("A partial final event was ignored")
+
+    event_ids = [event.delivery_id for event in events]
+    actual = set(event_ids)
+    duplicate_ids = sorted(
+        delivery_id for delivery_id, count in Counter(event_ids).items() if count > 1
+    )
+    if duplicate_ids:
+        messages.append(
+            "duplicate event history entries were ignored "
+            f"({', '.join(duplicate_ids[:3])})"
+        )
+        deduplicated: list[RepoEvent] = []
+        seen: set[str] = set()
+        for event in events:
+            if event.delivery_id in seen:
+                continue
+            seen.add(event.delivery_id)
+            deduplicated.append(event)
+        events = deduplicated
+    if expected_delivery_ids is not None:
+        missing_ids = sorted(expected - actual)
+        unexpected_ids = sorted(actual - expected)
+        if missing_ids:
+            messages.append(
+                "state contains committed deliveries absent from history "
+                f"({', '.join(missing_ids[:3])})"
+            )
+        if unexpected_ids:
+            messages.append(
+                "history contains deliveries absent from current state "
+                f"({', '.join(unexpected_ids[:3])})"
+            )
+            events = [event for event in events if event.delivery_id in expected]
+
+    if messages:
         return RadarHistory(
             status="partial",
             events=tuple(events),
-            message="A partial final event was ignored; current facts remain usable.",
+            message="; ".join(messages) + "; current facts remain usable, but history is incomplete.",
         )
     return RadarHistory(status="current", events=tuple(events))
 
 
-def read_coverage(path: Path) -> RadarCoverage:
+def read_coverage(path: Path, repo: str) -> RadarCoverage:
     """Read the recorded bootstrap bounds; absence never implies complete coverage."""
+    normalized = canonical_repo(repo)
     if not path.exists():
         return RadarCoverage(
             status="unknown",
@@ -537,6 +654,19 @@ def read_coverage(path: Path) -> RadarCoverage:
             payload = json.load(handle)
         if not isinstance(payload, dict):
             raise ValueError("bootstrap seed must be an object")
+        payload_repo = payload.get("repo")
+        try:
+            recorded_repo = canonical_repo(str(payload_repo or ""))
+        except ValueError:
+            recorded_repo = ""
+        if recorded_repo != normalized:
+            return RadarCoverage(
+                status="unavailable",
+                message=(
+                    "Coverage metadata repository mismatch; results may be partial and no "
+                    "bounds from another repository were used."
+                ),
+            )
         backfill = payload.get("backfill")
         if not isinstance(backfill, dict):
             return RadarCoverage(
@@ -570,11 +700,90 @@ def read_coverage(path: Path) -> RadarCoverage:
     )
 
 
+def read_inbox_status(path: Path, repo: str) -> RadarInboxStatus:
+    """Inspect one repository queue through SQLite's read-only mode."""
+    normalized = canonical_repo(repo)
+    if not path.exists():
+        return RadarInboxStatus(
+            status="unknown",
+            message="Inbox state is not recorded, so projection currentness cannot be confirmed.",
+        )
+
+    try:
+        uri = f"{path.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=1) as connection:
+            connection.execute("PRAGMA query_only = ON")
+            delivery_rows = connection.execute(
+                "SELECT repo, status, COUNT(*) FROM deliveries GROUP BY repo, status"
+            ).fetchall()
+            semantic_rows = connection.execute(
+                "SELECT document_id, status FROM semantic_jobs"
+            ).fetchall()
+
+        delivery_counts = {
+            "pending": 0,
+            "processing": 0,
+            "succeeded": 0,
+            "failed": 0,
+        }
+        for recorded_repo, delivery_status, count in delivery_rows:
+            if canonical_repo(str(recorded_repo)) != normalized:
+                raise ValueError("delivery repository mismatch")
+            if delivery_status not in delivery_counts:
+                raise ValueError("unknown delivery status")
+            delivery_counts[str(delivery_status)] += int(count)
+
+        semantic_counts = {"pending": 0, "processing": 0, "deferred": 0}
+        prefix = f"{normalized}#"
+        for document_id, semantic_status in semantic_rows:
+            if not str(document_id).casefold().startswith(prefix):
+                raise ValueError("semantic job repository mismatch")
+            if semantic_status not in semantic_counts:
+                raise ValueError("unknown semantic job status")
+            semantic_counts[str(semantic_status)] += 1
+    except ValueError as exc:
+        detail = "repository mismatch" if "repository mismatch" in str(exc) else "invalid rows"
+        return RadarInboxStatus(
+            status="unavailable",
+            message=(
+                f"Inbox metadata has a {detail}; no queue state from another repository was used."
+            ),
+        )
+    except (OSError, sqlite3.Error) as exc:
+        return RadarInboxStatus(
+            status="unavailable",
+            message=f"Inbox metadata is unavailable ({type(exc).__name__}).",
+        )
+
+    if delivery_counts["failed"]:
+        overall_status: InboxStatus = "degraded"
+        message = "One or more GitHub deliveries failed deterministic processing."
+    elif delivery_counts["pending"] or delivery_counts["processing"]:
+        overall_status = "pending"
+        message = "GitHub changes are pending deterministic processing."
+    else:
+        overall_status = "clear"
+        message = None
+    return RadarInboxStatus(
+        status=overall_status,
+        pending_deliveries=delivery_counts["pending"],
+        processing_deliveries=delivery_counts["processing"],
+        failed_deliveries=delivery_counts["failed"],
+        pending_semantic_jobs=semantic_counts["pending"],
+        processing_semantic_jobs=semantic_counts["processing"],
+        deferred_semantic_jobs=semantic_counts["deferred"],
+        message=message,
+    )
+
+
 def build_radar_snapshot(
     state: LiveState,
     history: RadarHistory,
     freshness: RepoFreshness,
     coverage: RadarCoverage,
+    *,
+    inbox: RadarInboxStatus | None = None,
+    observed_at: str | None = None,
 ) -> RadarSnapshot:
     repo = canonical_repo(state.repo)
     if canonical_repo(freshness.repo) != repo:
@@ -590,17 +799,35 @@ def build_radar_snapshot(
         recent_changes=changes,
         freshness=freshness,
         coverage=coverage,
+        inbox=inbox
+        or RadarInboxStatus(
+            status="unknown",
+            message="Inbox state was not supplied, so projection currentness cannot be confirmed.",
+        ),
+        evaluated_at=to_iso(observed_at) if observed_at else to_iso(now_utc()),
         history_status=history.status,
         history_message=history.message,
     )
 
 
-def load_radar_snapshot(paths: RepoPaths) -> RadarSnapshot:
+def load_radar_snapshot(paths: RepoPaths, observed_at: str | None = None) -> RadarSnapshot:
     """Load one selected repository only; every cross-repo mismatch fails closed."""
     state = read_state(paths.state)
     if canonical_repo(state.repo) != paths.repo:
         raise ValueError(f"state belongs to {state.repo!r}, not {paths.repo!r}")
-    history = read_event_snapshot(paths.event_log, paths.repo)
+    history = read_event_snapshot(
+        paths.event_log,
+        paths.repo,
+        expected_delivery_ids=state.processed_deliveries,
+    )
     freshness = read_freshness(paths.freshness, paths.repo)
-    coverage = read_coverage(paths.bootstrap_seed)
-    return build_radar_snapshot(state, history, freshness, coverage)
+    coverage = read_coverage(paths.bootstrap_seed, paths.repo)
+    inbox = read_inbox_status(paths.inbox, paths.repo)
+    return build_radar_snapshot(
+        state,
+        history,
+        freshness,
+        coverage,
+        inbox=inbox,
+        observed_at=observed_at,
+    )

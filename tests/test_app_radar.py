@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import sqlite3
 from pathlib import Path
@@ -9,11 +10,16 @@ from streamlit.testing.v1 import AppTest
 
 from issue_graphrag.live.analytics import RADAR_ANALYTICS_EVENTS
 from issue_graphrag.live.indexer import NullExtractor, apply_event, bootstrap
+from issue_graphrag.live.inbox import DeliveryInbox
 from issue_graphrag.live.records import seed_items
 from issue_graphrag.live.repositories import RepoFreshness, RepoRegistry, write_freshness
 from issue_graphrag.live.store import write_state
 
 APP = Path(__file__).resolve().parents[1] / "app.py"
+_APP_SPEC = importlib.util.spec_from_file_location("radar_app_module", APP)
+assert _APP_SPEC is not None and _APP_SPEC.loader is not None
+radar_app = importlib.util.module_from_spec(_APP_SPEC)
+_APP_SPEC.loader.exec_module(radar_app)
 
 
 def _configure(monkeypatch, root: Path, repos: tuple[str, ...]) -> None:  # noqa: ANN001
@@ -28,6 +34,8 @@ def _freshness(
     source: str = "current",
     semantic: str = "current",
     source_error: str | None = None,
+    next_source_sync_at: str = "2099-08-24T02:15:00Z",
+    last_state_commit_at: str = "2026-08-24T02:00:00Z",
 ) -> RepoFreshness:
     return RepoFreshness(
         repo=repo,
@@ -35,7 +43,8 @@ def _freshness(
         source_kind="scheduled_sync",
         source_error=source_error,
         last_source_sync_at="2026-08-24T02:00:00Z",
-        next_source_sync_at="2026-08-24T02:15:00Z",
+        next_source_sync_at=next_source_sync_at,
+        last_state_commit_at=last_state_commit_at,
         semantic_status=semantic,
         semantic_updated_at=(
             "2026-08-24T02:00:00Z" if semantic == "current" else None
@@ -79,6 +88,7 @@ def _write_repo(
     coverage: bool = True,
 ):
     paths = RepoRegistry(root).register(repo)
+    DeliveryInbox(paths.inbox)
     write_state(paths.state, state)
     write_freshness(paths.freshness, freshness or _freshness(repo))
     if events:
@@ -146,13 +156,22 @@ def test_radar_is_default_and_opens_traceable_issue_detail(
     shell_css = app.markdown[0].value
     assert "@media (max-width: 700px)" in shell_css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in shell_css
-    assert "Find the issue you can act on now" in _text(app)
+    assert "Find contribution opportunities with evidence you can inspect" in _text(app)
     assert "GITHUB FACT" in _text(app)
     assert "INFERRED CONTEXT" in _text(app)
     assert [button.label for button in app.button] == [
         "View #875 details",
         "View #922 details",
     ]
+    card_text = _text(app)
+    for required in (
+        "Assignees",
+        "Claiming / closing PR",
+        "Blockers",
+        "Related technical concepts",
+        "Last related change",
+    ):
+        assert required in card_text
 
     app.radio[0].set_value("Claimed").run()
     assert [button.label for button in app.button] == ["View #944 details"]
@@ -175,10 +194,14 @@ def test_radar_is_default_and_opens_traceable_issue_detail(
     evidence = _text(app)
     assert "#### GitHub evidence" in evidence
     assert "https://github.com/trustgraph-ai/trustgraph/issues/875" in evidence
-    github_button = next(button for button in app.button if button.label == "Open on GitHub")
-    github_button.click().run()
-    assert "You are leaving the read-only Radar" in _text(app)
-
+    with sqlite3.connect(tmp_path / "radar_analytics.sqlite") as connection:
+        before_outbound = [
+            row[0]
+            for row in connection.execute(
+                "SELECT event_name FROM radar_events ORDER BY id"
+            ).fetchall()
+        ]
+    assert "github_opened" not in before_outbound
     with sqlite3.connect(tmp_path / "radar_analytics.sqlite") as connection:
         event_names = [
             row[0]
@@ -186,7 +209,7 @@ def test_radar_is_default_and_opens_traceable_issue_detail(
                 "SELECT event_name FROM radar_events ORDER BY id"
             ).fetchall()
         ]
-    assert event_names == list(RADAR_ANALYTICS_EVENTS)
+    assert event_names == list(RADAR_ANALYTICS_EVENTS[:-1])
 
     app.sidebar.radio[0].set_value("Timeline & graph").run()
     assert app.title[0].value == "Timeline & graph"
@@ -268,7 +291,66 @@ def test_stale_last_good_data_is_never_described_as_current(tmp_path, monkeypatc
     assert "Showing the last-good GitHub facts" in text
     assert "rate limit prevented refresh" in text
     assert "GitHub facts current" not in text
+    assert "Ready now" not in text
+    assert "Find the issue you can act on now" not in text
+    assert "Last-known Ready" in text
     assert "Last-good issue" in text
+
+
+def test_pending_delivery_keeps_old_state_last_known_even_after_current_source_poll(
+    tmp_path,
+    monkeypatch,
+    demo_events,
+):
+    repo = demo_events[0].repo
+    state = _single_issue_state(repo, 33, "Pending delivery not applied")
+    paths = _write_repo(
+        tmp_path,
+        repo,
+        state,
+        freshness=_freshness(
+            repo,
+            last_state_commit_at="2026-08-24T01:00:00Z",
+        ),
+    )
+    DeliveryInbox(paths.inbox).enqueue(
+        demo_events[0],
+        now="2026-08-24T02:01:00Z",
+    )
+    _configure(monkeypatch, tmp_path, (repo,))
+
+    app = _run()
+
+    assert not app.exception
+    text = _text(app)
+    assert "GitHub changes are pending deterministic processing" in text
+    assert "GitHub facts current" not in text
+    assert "Ready now" not in text
+    assert "Last-known Ready" in text
+
+
+def test_overdue_scheduled_sync_is_explicitly_stale_not_ready_now(tmp_path, monkeypatch):
+    repo = "owner/overdue"
+    state = _single_issue_state(repo, 34, "Overdue last-good issue")
+    _write_repo(
+        tmp_path,
+        repo,
+        state,
+        freshness=_freshness(
+            repo,
+            next_source_sync_at="2026-08-24T02:15:00Z",
+        ),
+    )
+    _configure(monkeypatch, tmp_path, (repo,))
+
+    app = _run()
+
+    assert not app.exception
+    text = _text(app)
+    assert "scheduled source refresh is overdue" in text
+    assert "GitHub facts current" not in text
+    assert "Ready now" not in text
+    assert "Last-known Ready" in text
 
 
 def test_missing_freshness_timestamps_fail_visibly_degraded(tmp_path, monkeypatch):
@@ -375,3 +457,51 @@ def test_analytics_failure_does_not_block_the_radar(tmp_path, monkeypatch):
     assert not app.exception
     assert "Still actionable" in _text(app)
     assert [button.label for button in app.button] == ["View #61 details"]
+
+
+def test_invalid_repo_configuration_is_actionable_on_both_read_only_pages(
+    tmp_path,
+    monkeypatch,
+):
+    _configure(monkeypatch, tmp_path, ("not-a-repository",))
+
+    app = _run()
+
+    assert not app.exception
+    assert "Repository configuration could not be read" in _text(app)
+    assert "GITHUB_REPOS" in _text(app)
+
+    app.sidebar.radio[0].set_value("Timeline & graph").run()
+    assert not app.exception
+    assert "Repository configuration could not be read" in _text(app)
+    assert "GITHUB_REPOS" in _text(app)
+
+
+def test_github_analytics_is_bound_to_the_real_outbound_link_callback(monkeypatch):
+    captured: dict[str, object] = {}
+    tracked: list[tuple[object, ...]] = []
+
+    def fake_link_button(label, url, **kwargs):  # noqa: ANN001, ANN202
+        captured.update(label=label, url=url, **kwargs)
+
+    monkeypatch.setattr(radar_app.st, "link_button", fake_link_button)
+    monkeypatch.setattr(radar_app, "_track", lambda *args: tracked.append(args))
+
+    radar_app._render_github_action(
+        "Open on GitHub",
+        "https://github.com/owner/repo/issues/7",
+        repo="owner/repo",
+        issue_number=7,
+        source="issue_detail",
+        key="outbound",
+        primary=True,
+    )
+
+    assert tracked == []
+    assert captured["label"] == "Open on GitHub"
+    assert captured["url"] == "https://github.com/owner/repo/issues/7"
+    assert captured["type"] == "primary"
+    callback = captured["on_click"]
+    assert callable(callback)
+    callback(*captured["args"])
+    assert tracked == [("github_opened", "owner/repo", 7, "issue_detail")]

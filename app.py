@@ -23,6 +23,7 @@ from issue_graphrag.live.radar import (
 )
 from issue_graphrag.live.repositories import RepoRegistry, read_freshness
 from issue_graphrag.live.store import read_state
+from issue_graphrag.live.timeutil import now_utc, to_iso
 from issue_graphrag.live.viz import legend_markdown, subgraph_dot
 from issue_graphrag.llm.client import MockLLMClient, OpenAICompatibleClient
 from issue_graphrag.models import CommunityReport, TextUnit
@@ -56,9 +57,6 @@ Answer:
 
 NAVIGATION = ("Contribution Radar", "Timeline & graph", "Ask (local demo)")
 RADAR_FILTERS = ("Ready", "Claimed", "Blocked", "Recently changed")
-
-st.set_page_config(page_title="Contribution Radar", page_icon="🎯", layout="wide")
-
 
 def render_shell_css() -> None:
     st.markdown(
@@ -145,10 +143,12 @@ def load_radar_index(
     log_mtime: int,
     freshness_mtime: int,
     seed_mtime: int,
+    inbox_token: tuple[int, int, int],
+    checked_at: str,
 ) -> RadarSnapshot:
-    del state_mtime, log_mtime, freshness_mtime, seed_mtime
+    del state_mtime, log_mtime, freshness_mtime, seed_mtime, inbox_token
     registry = RepoRegistry(Path(root_text), configured_repos)
-    return load_radar_snapshot(registry.paths(repo))
+    return load_radar_snapshot(registry.paths(repo), observed_at=checked_at)
 
 
 @st.cache_data(show_spinner=False)
@@ -163,12 +163,24 @@ def load_inspection_index(
     state = read_state(Path(state_path_text))
     if state.repo.casefold() != repo.casefold():
         raise ValueError(f"state belongs to {state.repo!r}, not {repo!r}")
-    history = read_event_snapshot(Path(log_path_text), repo)
+    history = read_event_snapshot(
+        Path(log_path_text),
+        repo,
+        expected_delivery_ids=state.processed_deliveries,
+    )
     return state, list(history.events), history
 
 
 def _mtime(path: Path) -> int:
     return path.stat().st_mtime_ns if path.exists() else 0
+
+
+def _sqlite_token(path: Path) -> tuple[int, int, int]:
+    return (
+        _mtime(path),
+        _mtime(Path(f"{path}-wal")),
+        _mtime(Path(f"{path}-shm")),
+    )
 
 
 def _anonymous_session() -> str:
@@ -281,7 +293,7 @@ def _render_hero() -> None:
         """
         <section class="radar-hero">
           <div class="radar-kicker">Read-only contribution intelligence</div>
-          <h1>Find the issue you can act on now.</h1>
+          <h1>Find contribution opportunities with evidence you can inspect.</h1>
           <p>
             Contribution Radar combines GitHub-stated status, assignees, pull requests and
             blockers with clearly labeled inferred context—then shows the evidence behind
@@ -306,17 +318,63 @@ def _render_freshness(snapshot: RadarSnapshot) -> None:
             "Initial source sync has not been confirmed. Results below are a local last-known "
             "snapshot and may be incomplete."
         )
+    elif snapshot.source_schedule_overdue:
+        st.warning(
+            "The scheduled source refresh is overdue. Showing last-known GitHub facts, not "
+            f"a confirmed current snapshot. Last successful refresh: "
+            f"{freshness.last_source_sync_at or 'not recorded'}; expected next refresh: "
+            f"{freshness.next_source_sync_at or 'not recorded'}."
+        )
     elif snapshot.source_current_is_confirmed:
         source = "scheduled sync" if freshness.source_kind == "scheduled_sync" else "bootstrap"
         st.success(
             f"GitHub facts current via {source} · last successful sync "
             f"{freshness.last_source_sync_at}"
         )
+    elif snapshot.source_observation_current_is_confirmed and snapshot.inbox.status == "pending":
+        st.warning(
+            "GitHub changes are pending deterministic processing. The source refresh succeeded "
+            f"at {freshness.last_source_sync_at}, but cards remain a last-known projection until "
+            f"{snapshot.inbox.active_deliveries} queued delivery or deliveries are committed."
+        )
+    elif snapshot.source_observation_current_is_confirmed and snapshot.inbox.status == "degraded":
+        st.warning(
+            "GitHub delivery processing is degraded. Showing last-known facts; failed queue work "
+            "must be recovered before projection currentness can be confirmed."
+        )
+    elif snapshot.source_observation_current_is_confirmed and snapshot.inbox.status in {
+        "unknown",
+        "unavailable",
+    }:
+        st.warning(
+            f"{snapshot.inbox.message or 'Inbox state is unavailable.'} Treat cards as "
+            "last-known facts, not a confirmed current projection."
+        )
+    elif snapshot.source_observation_current_is_confirmed:
+        st.warning(
+            "GitHub source refresh succeeded, but the state commit time is missing. Treat cards "
+            "as a degraded last-known projection, not current results."
+        )
     else:
         st.warning(
             "GitHub freshness cannot be confirmed because the successful-sync time or source "
             "kind is missing. Treat these as degraded last-known facts, not current results."
         )
+
+    if not snapshot.source_observation_current_is_confirmed:
+        if snapshot.inbox.status == "pending":
+            st.warning(
+                "GitHub changes are also pending deterministic processing. Cards remain the "
+                f"last-known committed state while {snapshot.inbox.active_deliveries} delivery "
+                "or deliveries wait in this repository's inbox."
+            )
+        elif snapshot.inbox.status == "degraded":
+            st.warning(
+                "Deterministic delivery processing is also degraded for this repository; no "
+                "failed or pending work has been presented as current."
+            )
+        elif snapshot.inbox.status == "unavailable":
+            st.warning(snapshot.inbox.message or "Inbox health is unavailable for this repository.")
 
     if freshness.semantic_status == "degraded":
         st.warning(
@@ -328,9 +386,14 @@ def _render_freshness(snapshot: RadarSnapshot) -> None:
             "GitHub facts are usable while semantic enrichment is pending. "
             "Inference does not decide Ready, Claimed or Blocked."
         )
+    elif snapshot.inbox.active_semantic_jobs:
+        st.info(
+            f"GitHub facts remain available while {snapshot.inbox.active_semantic_jobs} semantic "
+            "job or jobs are pending. Inferred context is last-good until they finish."
+        )
     elif not snapshot.semantic_current_is_confirmed:
         st.warning(
-            "Semantic freshness cannot be confirmed because its update time is missing. "
+            "Semantic freshness cannot be confirmed against the selected repository state. "
             "Inferred context is degraded and remains separate from GitHub facts."
         )
 
@@ -344,8 +407,9 @@ def _render_freshness(snapshot: RadarSnapshot) -> None:
 
 
 def _render_counts(snapshot: RadarSnapshot) -> None:
+    ready_label = "Ready now" if snapshot.source_current_is_confirmed else "Last-known Ready"
     counts = (
-        (snapshot.count("available"), "Ready now"),
+        (snapshot.count("available"), ready_label),
         (snapshot.count("claimed"), "Already claimed"),
         (snapshot.count("blocked"), "Blocked"),
         (len(snapshot.recent_changes), "Recently changed"),
@@ -376,6 +440,29 @@ def _show_issue(issue: RadarIssue, repo: str, source: str) -> None:
     _track("opportunity_opened", repo, issue.number, source)
 
 
+def _render_github_action(
+    label: str,
+    url: str,
+    *,
+    repo: str,
+    issue_number: int,
+    source: str,
+    key: str,
+    primary: bool = False,
+    use_container_width: bool = False,
+) -> None:
+    """Bind analytics to the actual outbound link activation, never link reveal."""
+    st.link_button(
+        label,
+        url,
+        key=key,
+        type="primary" if primary else "secondary",
+        on_click=_track,
+        args=("github_opened", repo, issue_number, source),
+        use_container_width=use_container_width,
+    )
+
+
 def _render_issue_card(issue: RadarIssue, repo: str) -> None:
     with st.container(border=True):
         st.markdown(
@@ -387,7 +474,13 @@ def _render_issue_card(issue: RadarIssue, repo: str) -> None:
             unsafe_allow_html=True,
         )
         updated = issue.updated_at or "not recorded"
-        st.caption(f"Deterministic score {issue.score:.2f} · GitHub updated {updated}")
+        last_related_change = (
+            issue.recent_changes[0].observed_at if issue.recent_changes else updated
+        )
+        st.caption(
+            f"Deterministic score {issue.score:.2f} · Last related change "
+            f"{last_related_change}"
+        )
         for reason in issue.reasons[:3]:
             st.markdown(
                 f"{_origin_badge(reason.origin)} &nbsp; {escape(reason.text)}",
@@ -395,6 +488,26 @@ def _render_issue_card(issue: RadarIssue, repo: str) -> None:
             )
         if issue.labels:
             st.caption("Labels · " + " · ".join(issue.labels[:5]))
+        assignees = ", ".join(issue.assignees) or "Unassigned"
+        claiming_prs = ", ".join(issue.claimed_by) or "None"
+        blockers = ", ".join(issue.blocked_by) or "None"
+        if issue.blocking_dependency_count:
+            blockers = f"{blockers} · {issue.blocking_dependency_count} native open dependencies"
+        st.markdown(
+            f"{_origin_badge('github')} &nbsp; <strong>Assignees:</strong> "
+            f"{escape(assignees)}<br>"
+            f"{_origin_badge('github')} &nbsp; <strong>Claiming / closing PR:</strong> "
+            f"{escape(claiming_prs)}<br>"
+            f"{_origin_badge('github')} &nbsp; <strong>Blockers:</strong> {escape(blockers)}",
+            unsafe_allow_html=True,
+        )
+        concepts = ", ".join(issue.concepts) or "None recorded"
+        st.markdown(
+            f"{_origin_badge('inference')} &nbsp; "
+            f"<strong>Related technical concepts:</strong> "
+            f"{escape(concepts)}",
+            unsafe_allow_html=True,
+        )
         if not issue.evidence_complete:
             st.warning(
                 "Evidence is incomplete. Treat this status as needing source verification, "
@@ -406,6 +519,19 @@ def _render_issue_card(issue: RadarIssue, repo: str) -> None:
             use_container_width=True,
         ):
             _show_issue(issue, repo, "radar_card")
+        github_url = _safe_github_url(issue.url)
+        if github_url:
+            _render_github_action(
+                f"Open #{issue.number} on GitHub",
+                github_url,
+                repo=repo,
+                issue_number=issue.number,
+                source="radar_card",
+                key=f"github_card__{repo.replace('/', '__')}__{issue.number}",
+                use_container_width=True,
+            )
+        else:
+            st.warning("GitHub original link unavailable; verify source evidence before acting.")
 
 
 def _render_recent_change(change: RadarChange, snapshot: RadarSnapshot) -> None:
@@ -436,10 +562,16 @@ def _render_recent_change(change: RadarChange, snapshot: RadarSnapshot) -> None:
 
 def _render_empty_filter(filter_name: str, snapshot: RadarSnapshot) -> None:
     if filter_name == "Ready":
-        st.info(
-            "No issue is currently confirmed Ready. Review Claimed and Blocked to understand "
-            "why, or try again after the next source sync."
-        )
+        if snapshot.source_current_is_confirmed:
+            st.info(
+                "No issue is currently confirmed Ready. Review Claimed and Blocked to understand "
+                "why, or try again after the next source sync."
+            )
+        else:
+            st.info(
+                "No Ready issue appears in this last-known snapshot. Restore current source and "
+                "queue health before treating the result as current."
+            )
     elif filter_name == "Recently changed" and snapshot.history_status != "current":
         st.warning(
             snapshot.history_message
@@ -557,21 +689,18 @@ def _render_issue_detail(issue: RadarIssue, snapshot: RadarSnapshot) -> None:
                 f"({change.source_label})"
             )
 
-    github_visible = issue.number in set(st.session_state.get("_radar_github_visible", set()))
     github_url = _safe_github_url(issue.url)
     if github_url:
-        github_label = "Hide GitHub link" if github_visible else "Open on GitHub"
-        if st.button(
-            github_label,
+        st.caption("The following action opens the GitHub source of truth in a new tab.")
+        _render_github_action(
+            "Open on GitHub",
+            github_url,
+            repo=snapshot.repo,
+            issue_number=issue.number,
+            source="issue_detail",
             key=f"github_toggle__{snapshot.repo.replace('/', '__')}__{issue.number}",
-            type="primary",
-        ):
-            if _toggle_issue_set("_radar_github_visible", issue.number):
-                _track("github_opened", snapshot.repo, issue.number, "issue_detail")
-            st.rerun()
-        if github_visible:
-            st.info("You are leaving the read-only Radar to inspect or contribute on GitHub.")
-            st.link_button("Continue to GitHub", github_url, type="primary")
+            primary=True,
+        )
     else:
         st.warning("The GitHub source URL is unavailable, so no outbound action is offered.")
 
@@ -584,7 +713,6 @@ def _reset_repo_navigation(repo: str) -> bool:
     st.session_state["radar_filter"] = "Ready"
     st.session_state.pop("_radar_selected_issue", None)
     st.session_state["_radar_evidence_visible"] = set()
-    st.session_state["_radar_github_visible"] = set()
     return True
 
 
@@ -600,8 +728,8 @@ def _record_radar_view(repo: str) -> None:
 def render_radar_page() -> None:
     _render_hero()
     settings = load_settings()
-    registry = RepoRegistry(settings.repo_data_dir, settings.github_repos)
     try:
+        registry = RepoRegistry(settings.repo_data_dir, settings.github_repos)
         repos = registry.repositories()
     except Exception as exc:
         st.error(f"Repository configuration could not be read ({type(exc).__name__}).")
@@ -624,7 +752,12 @@ def render_radar_page() -> None:
         _track("repo_selected", selected_repo, None, "repo_selector")
     _record_radar_view(selected_repo)
 
-    paths = registry.paths(selected_repo)
+    try:
+        paths = registry.paths(selected_repo)
+    except Exception as exc:
+        st.error(f"Repository configuration could not be read ({type(exc).__name__}).")
+        st.info("Check `GITHUB_REPOS` or the repository registry, then reload the page.")
+        return
     if not paths.state.exists():
         st.info(
             "Loading initial repository index… No ranking is shown until an initial "
@@ -647,6 +780,8 @@ def render_radar_page() -> None:
                 _mtime(paths.event_log),
                 _mtime(paths.freshness),
                 _mtime(paths.bootstrap_seed),
+                _sqlite_token(paths.inbox),
+                to_iso(now_utc().replace(second=0, microsecond=0)),
             )
     except Exception as exc:
         st.error(
@@ -791,17 +926,23 @@ def render_inspection_page() -> None:
         "recommendation graph. The Radar remains the primary product surface."
     )
     settings = load_settings()
-    registry = RepoRegistry(settings.repo_data_dir, settings.github_repos)
     try:
+        registry = RepoRegistry(settings.repo_data_dir, settings.github_repos)
         repos = registry.repositories()
     except Exception as exc:
         st.error(f"Repository configuration could not be read ({type(exc).__name__}).")
+        st.info("Check `GITHUB_REPOS` or the repository registry, then reload the page.")
         return
     if not repos:
         st.info("No configured repository is available for inspection.")
         return
     selected_repo = st.selectbox("Repository", repos, key="inspection_repository")
-    paths = registry.paths(selected_repo)
+    try:
+        paths = registry.paths(selected_repo)
+    except Exception as exc:
+        st.error(f"Repository configuration could not be read ({type(exc).__name__}).")
+        st.info("Check `GITHUB_REPOS` or the repository registry, then reload the page.")
+        return
     if not paths.state.exists():
         st.info("Initial index is still in progress; there is no timeline to inspect yet.")
         return
@@ -873,6 +1014,7 @@ def render_inspection_page() -> None:
 
 
 def main() -> None:
+    st.set_page_config(page_title="Contribution Radar", page_icon="🎯", layout="wide")
     render_shell_css()
     with st.sidebar:
         st.markdown("### Contribution Radar")
@@ -904,4 +1046,5 @@ def main() -> None:
         render_ask_page(mode, generate_answer, show_context, question)
 
 
-main()
+if __name__ == "__main__":
+    main()

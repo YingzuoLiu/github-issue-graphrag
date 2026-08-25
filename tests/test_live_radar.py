@@ -5,13 +5,16 @@ import json
 import pytest
 
 from issue_graphrag.live.indexer import NullExtractor, apply_event, bootstrap
+from issue_graphrag.live.inbox import DeliveryInbox
 from issue_graphrag.live.radar import (
     RadarCoverage,
     RadarHistory,
+    RadarInboxStatus,
     build_radar_snapshot,
     load_radar_snapshot,
     read_coverage,
     read_event_snapshot,
+    read_inbox_status,
 )
 from issue_graphrag.live.records import seed_items
 from issue_graphrag.live.repositories import RepoFreshness, RepoRegistry, write_freshness
@@ -28,6 +31,8 @@ def _freshness(repo: str, *, source: str = "current", semantic: str = "current")
         source_status=source,
         source_kind="scheduled_sync",
         last_source_sync_at="2026-08-24T02:00:00Z",
+        next_source_sync_at="2099-08-24T02:15:00Z",
+        last_state_commit_at="2026-08-24T02:00:00Z",
         semantic_status=semantic,
         semantic_updated_at=(
             "2026-08-24T02:00:00Z" if semantic == "current" else None
@@ -44,6 +49,8 @@ def _replayed_snapshot(seeded_state, demo_events, extractor):  # noqa: ANN001
         RadarHistory(status="current", events=tuple(events)),
         _freshness(seeded_state.repo),
         _coverage(),
+        inbox=RadarInboxStatus(status="clear"),
+        observed_at="2026-08-24T02:05:00Z",
     )
 
 
@@ -119,6 +126,8 @@ def test_missing_source_links_are_explicitly_not_complete_evidence():
         RadarHistory(status="not_started"),
         _freshness(state.repo),
         _coverage(),
+        inbox=RadarInboxStatus(status="clear"),
+        observed_at="2026-08-24T02:05:00Z",
     )
 
     issue = snapshot.issue(7)
@@ -140,6 +149,8 @@ def test_degraded_semantics_preserve_github_opportunities_without_claiming_curre
         RadarHistory(status="current", events=tuple(events)),
         _freshness(seeded_state.repo, semantic="degraded"),
         _coverage(),
+        inbox=RadarInboxStatus(status="clear"),
+        observed_at="2026-08-24T02:05:00Z",
     )
 
     assert snapshot.freshness.semantic_status == "degraded"
@@ -179,6 +190,29 @@ def test_event_snapshot_rejects_cross_repository_history(tmp_path, demo_events):
     assert "current facts remain usable" in (history.message or "")
 
 
+def test_event_snapshot_marks_state_log_crash_gap_partial_without_repairing(
+    tmp_path,
+    demo_events,
+):
+    path = tmp_path / "event_log.jsonl"
+    original = demo_events[0].model_dump_json().encode("utf-8") + b"\n"
+    path.write_bytes(original)
+
+    history = read_event_snapshot(
+        path,
+        demo_events[0].repo,
+        expected_delivery_ids=(
+            demo_events[0].delivery_id,
+            demo_events[1].delivery_id,
+        ),
+    )
+
+    assert history.status == "partial"
+    assert [event.delivery_id for event in history.events] == [demo_events[0].delivery_id]
+    assert demo_events[1].delivery_id in (history.message or "")
+    assert path.read_bytes() == original
+
+
 def test_reconciliation_changes_keep_their_observation_label(
     seeded_state,
     demo_events,
@@ -192,6 +226,8 @@ def test_reconciliation_changes_keep_their_observation_label(
         RadarHistory(status="current", events=(event,)),
         _freshness(seeded_state.repo),
         _coverage(),
+        inbox=RadarInboxStatus(status="clear"),
+        observed_at="2026-08-24T02:05:00Z",
     )
 
     assert snapshot.recent_changes
@@ -202,7 +238,8 @@ def test_reconciliation_changes_keep_their_observation_label(
 
 
 def test_coverage_is_bounded_unknown_or_unavailable_without_assuming_complete(tmp_path):
-    missing = read_coverage(tmp_path / "missing.json")
+    repo = "owner/repo"
+    missing = read_coverage(tmp_path / "missing.json", repo)
     assert missing.status == "unknown"
     assert "cannot be confirmed" in missing.message
 
@@ -210,6 +247,7 @@ def test_coverage_is_bounded_unknown_or_unavailable_without_assuming_complete(tm
     bounded_path.write_text(
         json.dumps(
             {
+                "repo": repo,
                 "items": [{"number": 1}, {"number": 2}],
                 "backfill": {
                     "item_limit": 2,
@@ -220,15 +258,55 @@ def test_coverage_is_bounded_unknown_or_unavailable_without_assuming_complete(tm
         ),
         encoding="utf-8",
     )
-    bounded = read_coverage(bounded_path)
+    bounded = read_coverage(bounded_path, repo)
     assert bounded.status == "bounded" and bounded.cap_reached
     assert "older items may be absent" in bounded.message
 
     broken_path = tmp_path / "broken.json"
     broken_path.write_text("{", encoding="utf-8")
-    broken = read_coverage(broken_path)
+    broken = read_coverage(broken_path, repo)
     assert broken.status == "unavailable"
     assert "results may be partial" in broken.message
+
+    cross_repo_path = tmp_path / "cross-repo.json"
+    cross_repo_path.write_text(
+        json.dumps(
+            {
+                "repo": "other/repository",
+                "items": [{"number": 99}],
+                "backfill": {
+                    "item_limit": 100,
+                    "comment_limit_per_item": 100,
+                    "file_limit_per_pull": 100,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cross_repo = read_coverage(cross_repo_path, repo)
+    assert cross_repo.status == "unavailable"
+    assert cross_repo.observed_items is None
+    assert "repository mismatch" in cross_repo.message
+
+
+def test_read_only_inbox_status_blocks_currentness_and_rejects_cross_repo_rows(
+    tmp_path,
+    demo_events,
+):
+    path = tmp_path / "inbox.db"
+    inbox = DeliveryInbox(path)
+    inbox.enqueue(demo_events[0], now="2026-08-24T02:01:00Z")
+    before = path.read_bytes()
+
+    pending = read_inbox_status(path, demo_events[0].repo)
+
+    assert pending.status == "pending"
+    assert pending.pending_deliveries == 1
+    assert path.read_bytes() == before
+
+    cross_repo = read_inbox_status(path, "other/repository")
+    assert cross_repo.status == "unavailable"
+    assert "repository mismatch" in (cross_repo.message or "")
 
 
 def test_repository_loader_never_substitutes_or_combines_another_repo(tmp_path):
@@ -239,6 +317,8 @@ def test_repository_loader_never_substitutes_or_combines_another_repo(tmp_path):
     write_state(beta.state, _state(beta.repo, 2, "Beta only"))
     write_freshness(alpha.freshness, _freshness(alpha.repo))
     write_freshness(beta.freshness, _freshness(beta.repo))
+    DeliveryInbox(alpha.inbox)
+    DeliveryInbox(beta.inbox)
 
     first = load_radar_snapshot(alpha)
     second = load_radar_snapshot(beta)
@@ -258,6 +338,8 @@ def test_no_open_issues_is_an_explicit_no_opportunity_result():
         RadarHistory(status="not_started"),
         _freshness(state.repo),
         _coverage(),
+        inbox=RadarInboxStatus(status="clear"),
+        observed_at="2026-08-24T02:05:00Z",
     )
 
     assert snapshot.opportunities == ()
