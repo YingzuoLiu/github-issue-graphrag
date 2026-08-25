@@ -112,7 +112,7 @@ def render_shell_css() -> None:
         .radar-origin-github {color: #2f81f7;}
         .radar-origin-inference {color: #9b72ff;}
         @media (max-width: 700px) {
-            .block-container {padding: 1rem .85rem 3rem;}
+            .block-container {padding: 2.5rem .85rem 3rem;}
             .radar-hero {padding: 1.1rem; border-radius: 14px;}
             .radar-stats {grid-template-columns: repeat(2, minmax(0, 1fr));}
             .radar-stat {padding: .7rem .8rem;}
