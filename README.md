@@ -82,9 +82,10 @@ Contribution opportunities (now)
          - 1 linked technical concepts: Hybrid Retrieval (+0.20)
 ```
 
-The Streamlit app (`pip install -e ".[app]" && streamlit run app.py`) puts the same replay behind
-a timeline scrubber. After installation, everything above runs offline; only the batch index and
-`--llm` extraction need a provider key.
+The Streamlit app (`pip install -e ".[app]" && streamlit run app.py`) opens on a read-only
+Contribution Radar with Ready, Claimed, Blocked and Recently changed views. The event timeline and
+graph remain available as secondary inspection tools. After installation, everything above runs
+offline; only the batch index and `--llm` extraction need a provider key.
 
 ## Contents
 
@@ -201,7 +202,9 @@ This makes it easier to answer questions like:
 
 ## Demo UI
 
-The Streamlit demo provides a small interface for selecting retrieval mode, running demo questions, generating grounded answers, and inspecting retrieved context.
+The Streamlit app starts with contribution opportunities, plain-language reasons and traceable
+GitHub evidence. Its separate local-demo page still supports retrieval-mode selection, grounded
+answers and context inspection when a batch index is present.
 
 ![Streamlit demo](examples/demo_screenshot.png)
 
@@ -230,7 +233,7 @@ The Streamlit demo provides a small interface for selecting retrieval mode, runn
 | Correctness | An explicit ontology separating who may assert a predicate from whether the assertion is legal; a rebuild consistency check fingerprinting direction and provenance |
 | Cost control | Changed-document extraction, repo-local SQLite cache, cross-repository daily/monthly hard caps and resumable fair batches |
 | Source convergence | A 15-minute configurable, read-only synchronizer uses HTTP validators, bounded retries and deterministic reconciliation deliveries through the existing repository inbox/single writer |
-| Output | Deterministic contribution scoring with per-signal reasons and source links, deterministic fixture replay, a configured repository selector, freshness/staleness metadata and a Streamlit timeline that distinguishes webhook delivery from scheduled observation |
+| Output | A default Contribution Radar with deterministic Ready / Claimed / Blocked / Recently changed views, issue details, explicit GitHub-fact / inferred-context boundaries, evidence links, repository isolation and visible freshness/degradation; timeline and graph inspection remain secondary |
 
 ## Setup
 
@@ -809,16 +812,19 @@ python -m pip install -e ".[app]"
 streamlit run app.py
 ```
 
-The app has two tabs:
+The sidebar exposes three pages:
 
-- **Ask** — choose a retrieval mode, run demo questions, generate grounded answers, and inspect
-  the retrieved local/global context. Retrieval settings live in the sidebar. Needs
-  [a batch index](#build-an-index), which needs a provider key; the tab says so rather than
-  failing if one has not been built.
-- **Live contribution graph** — scrub through the replayed event timeline, see the 1–2 hop
-  neighbourhood each event touched (green added, orange state changed, grey dashed invalidated),
-  read the facts that appeared and retired, and watch the contribution ranking move with the
-  reason attached. Needs only `python scripts/replay_events.py`, which runs offline.
+- **Contribution Radar** (default) — choose an operator-configured repository; filter Ready,
+  Claimed, Blocked or Recently changed issues; inspect deterministic reasons, GitHub-stated facts,
+  separately labeled inferred context and source evidence. Stale, degraded, bounded and partial
+  states remain visible rather than being presented as current or complete.
+- **Timeline & graph** — audit how each complete webhook delivery or scheduled observation changed
+  facts and the recommendation graph. It is deliberately a secondary inspection surface. The
+  deterministic fixture path needs only `python scripts/replay_events.py` and runs offline.
+- **Ask (local demo)** — choose a retrieval mode, run demo questions, generate grounded answers,
+  and inspect retrieved local/global context. It needs [a batch index](#build-an-index); the page
+  explains the missing-index action instead of failing when one has not been built. No provider is
+  called merely by browsing the Radar.
 
 ## Query modes
 
