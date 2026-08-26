@@ -91,6 +91,7 @@ def test_public_viewer_rejects_credentials_and_has_separate_analytics(monkeypatc
 
 
 def test_public_viewer_rejects_analytics_inside_repository_data(monkeypatch, tmp_path):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("PUBLIC_RADAR_ONLY", "1")
     monkeypatch.setenv("REPO_DATA_DIR", str(tmp_path / "repos"))
     monkeypatch.setenv(
