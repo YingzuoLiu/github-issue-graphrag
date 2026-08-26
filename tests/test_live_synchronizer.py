@@ -91,6 +91,24 @@ def _comment_resource(
     )
 
 
+def _comment_manifest_resource(
+    comment_ids: list[str],
+    *,
+    observed_at: str = NOW,
+    parent_number: int = 7,
+) -> SyncResource:
+    return SyncResource.observed(
+        kind="comment_manifest",
+        identity=f"comment_manifest:issue:{parent_number}",
+        source_updated_at=observed_at,
+        last_observed_at=observed_at,
+        payload={},
+        attachments={"comment_ids": sorted(comment_ids)},
+        parent_kind="issue",
+        parent_number=parent_number,
+    )
+
+
 def _dependency_resource(count: int, *, updated_at: str = NOW) -> SyncResource:
     return SyncResource.observed(
         kind="dependency",
@@ -312,6 +330,108 @@ def test_truncated_comment_window_never_infers_a_deletion():
     assert "comment:91" in plan.resources
 
 
+def test_changed_complete_manifest_reconciles_deletion_without_old_comment_payload():
+    """A compacted/rebaselined checkpoint can still remove a stale live comment."""
+    issue = _issue_resource()
+    old_manifest = _comment_manifest_resource(["91"], observed_at=NOW)
+    current_manifest = _comment_manifest_resource([], observed_at=LATER)
+    previous = RepoSyncState(
+        repo=REPO,
+        resources={issue.identity: issue, old_manifest.identity: old_manifest},
+    )
+    observation = _observation([issue, current_manifest])
+
+    plan = plan_reconciliation(REPO, previous, observation)
+
+    assert [(event.event_type, event.action) for event in plan.events] == [
+        ("issue_comments", "reconciled")
+    ]
+    assert plan.events[0].attachments["comment_ids"] == []
+
+
+def test_rebaseline_manifest_repairs_a_deleted_comment_through_the_single_writer(tmp_path):
+    issue = _issue_resource()
+    comment = _comment_resource()
+    baseline_manifest = _comment_manifest_resource(["91"], observed_at=NOW)
+    first_observer = StaticObserver(_observation([issue, comment, baseline_manifest]))
+    synchronizer, paths = _synchronizer(tmp_path, first_observer)
+
+    assert synchronizer.sync_once(now=NOW).status == "succeeded"
+    _drain(paths, NOW)
+    document_id = f"{REPO}#issue-7"
+    assert "91" in read_state(paths.state).items[document_id].comments
+
+    # This is the checkpoint shape after explicit operator rebaseline. The
+    # inbox and live state remain durable, so unchanged source deliveries dedup.
+    write_sync_state(paths.sync_state, RepoSyncState(repo=REPO))
+    deleted_manifest = _comment_manifest_resource([], observed_at=LATER)
+    second = ScheduledSynchronizer(
+        repo=paths.repo,
+        inbox=DeliveryInbox(paths.inbox),
+        sync_state_path=paths.sync_state,
+        freshness_path=paths.freshness,
+        observer=StaticObserver(_observation([issue, deleted_manifest])),
+    ).sync_once(now=LATER)
+
+    assert second.status == "succeeded"
+    assert second.enqueued == 1 and second.duplicates == 1
+    _drain(paths, LATER)
+    state = read_state(paths.state)
+    assert "91" not in state.items[document_id].comments
+    assert "91" in state.items[document_id].deleted_comments
+
+
+def test_comment_manifest_state_return_is_a_new_durable_transition(tmp_path):
+    """A -> B -> A must not reuse A's original manifest delivery id."""
+    issue = _issue_resource()
+    first_comment = _comment_resource(comment_id="91")
+    second_comment = _comment_resource(comment_id="92", updated_at=LATER)
+    first_manifest = _comment_manifest_resource(["91"], observed_at=NOW)
+    synchronizer, paths = _synchronizer(
+        tmp_path,
+        StaticObserver(_observation([issue, first_comment, first_manifest])),
+    )
+
+    first = synchronizer.sync_once(now=NOW)
+    assert first.status == "succeeded"
+    _drain(paths, NOW)
+
+    expanded_at = "2026-08-24T02:15:00Z"
+    expanded_manifest = _comment_manifest_resource(
+        ["91", "92"],
+        observed_at=expanded_at,
+    )
+    expanded = ScheduledSynchronizer(
+        repo=paths.repo,
+        inbox=DeliveryInbox(paths.inbox),
+        sync_state_path=paths.sync_state,
+        freshness_path=paths.freshness,
+        observer=StaticObserver(
+            _observation([issue, first_comment, second_comment, expanded_manifest])
+        ),
+    ).sync_once(now=expanded_at)
+    assert expanded.status == "succeeded"
+    _drain(paths, expanded_at)
+
+    returned_at = "2026-08-24T02:30:00Z"
+    returned_manifest = _comment_manifest_resource(["91"], observed_at=returned_at)
+    returned = ScheduledSynchronizer(
+        repo=paths.repo,
+        inbox=DeliveryInbox(paths.inbox),
+        sync_state_path=paths.sync_state,
+        freshness_path=paths.freshness,
+        observer=StaticObserver(_observation([issue, first_comment, returned_manifest])),
+    ).sync_once(now=returned_at)
+
+    assert returned.status == "succeeded"
+    assert returned.enqueued == 1 and returned.duplicates == 0
+    _drain(paths, returned_at)
+    document_id = f"{REPO}#issue-7"
+    state = read_state(paths.state)
+    assert set(state.items[document_id].comments) == {"91"}
+    assert "92" in state.items[document_id].deleted_comments
+
+
 class FailOnSecondEnqueue:
     def __init__(self, inbox: DeliveryInbox):
         self.inbox = inbox
@@ -413,6 +533,35 @@ def test_exhausted_network_failure_preserves_last_good_and_retries_later(tmp_pat
     assert "ConnectionError" in (freshness.source_error or "")
 
 
+def test_corrupt_checkpoint_never_reaches_github_and_marks_the_lane_stale(tmp_path):
+    paths = RepoRegistry(tmp_path).register(REPO)
+    write_sync_state(
+        paths.sync_state,
+        RepoSyncState(repo=REPO, resources={"issue:7": _issue_resource()}),
+    )
+    corrupt_bytes = b'{"version": 2, "repo": "getzep/graphiti", "resources": {'
+    paths.sync_state.write_bytes(corrupt_bytes)
+    observer = StaticObserver(_observation([_issue_resource(updated_at=LATER)]))
+    synchronizer = ScheduledSynchronizer(
+        repo=paths.repo,
+        inbox=DeliveryInbox(paths.inbox),
+        sync_state_path=paths.sync_state,
+        freshness_path=paths.freshness,
+        observer=observer,
+    )
+
+    result = synchronizer.sync_once(now=LATER)
+
+    assert result.status == "failed"
+    assert "SyncCheckpointError" in (result.error or "")
+    assert observer.previous_states == []
+    assert DeliveryInbox(paths.inbox).count() == 0
+    assert paths.sync_state.read_bytes() == corrupt_bytes
+    freshness = read_freshness(paths.freshness, REPO)
+    assert freshness.source_status == "stale"
+    assert "corrupt" in (freshness.source_error or "")
+
+
 def test_repository_sync_checkpoints_are_isolated(tmp_path):
     first = repo_paths(tmp_path, "alpha/one")
     second = repo_paths(tmp_path, "beta/two")
@@ -504,6 +653,63 @@ def test_conditional_get_reuses_cached_representation_on_304():
     assert second.not_modified_requests == 1
     assert session.calls[1][1]["headers"]["If-None-Match"] == '"issues-v1"'
     assert client.write_request_count == 0
+
+
+def test_complete_comment_page_publishes_a_stable_bounded_manifest():
+    raw_comment = {
+        "id": 91,
+        "body": "I can reproduce this.",
+        "user": {"login": "contributor"},
+        "html_url": f"https://github.com/{REPO}/issues/7#issuecomment-91",
+        "created_at": NOW,
+        "updated_at": NOW,
+    }
+    session = FakeSession(
+        [
+            FakeResponse(200, [_raw_issue()]),
+            FakeResponse(200, [raw_comment]),
+        ]
+    )
+    client = ConditionalGitHubClient(session=session, sleep=lambda _: None)
+    observed = client.observe(
+        REPO,
+        RepoSyncState(repo=REPO),
+        _http_config(comment_limit_per_item=2, comment_max_pages=1),
+        LATER,
+    )
+
+    assert set(observed.resources) == {
+        "issue:7",
+        "comment:91",
+        "comment_manifest:issue:7",
+    }
+    manifest = observed.resources["comment_manifest:issue:7"]
+    assert manifest.attachments == {"comment_ids": ["91"]}
+    assert manifest.source_updated_at == LATER
+
+    same_set_later = _comment_manifest_resource(
+        ["91"],
+        observed_at="2026-08-24T02:30:00Z",
+    )
+    previous = RepoSyncState(repo=REPO, resources={manifest.identity: manifest})
+    plan = plan_reconciliation(REPO, previous, _observation([same_set_later]))
+    assert plan.events == ()
+
+
+def test_checkpoint_limit_fails_before_any_delivery_is_enqueued(tmp_path):
+    observer = StaticObserver(_observation([_issue_resource(), _comment_resource()]))
+    synchronizer, paths = _synchronizer(
+        tmp_path,
+        observer,
+        config=SyncConfig(checkpoint_max_resources=1),
+    )
+
+    result = synchronizer.sync_once(now=NOW)
+
+    assert result.status == "failed"
+    assert "checkpoint resource limit exceeded" in (result.error or "")
+    assert DeliveryInbox(paths.inbox).count() == 0
+    assert not paths.sync_state.exists()
 
 
 def test_transient_http_failure_retries_serially_with_exponential_backoff():

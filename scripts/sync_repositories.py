@@ -14,8 +14,19 @@ from issue_graphrag.live.synchronizer import (
     ScheduledSynchronizer,
     SyncConfig,
     SyncResult,
-    read_sync_state,
     run_synchronizer_loop,
+)
+from issue_graphrag.live.sync_checkpoint import (
+    DEFAULT_CLOSED_RETENTION_SECONDS,
+    DEFAULT_MAX_CHECKPOINT_BYTES,
+    DEFAULT_MAX_CHECKPOINT_RESOURCES,
+    DEFAULT_OPEN_RETENTION_SECONDS,
+    CheckpointInspection,
+    CheckpointRecoveryResult,
+    RecoveryAction,
+    SyncCheckpointError,
+    inspect_sync_checkpoint,
+    recover_sync_checkpoint,
 )
 
 DEFAULT_SYNC_REPO = "getzep/graphiti"
@@ -27,16 +38,73 @@ def _print_result(result: SyncResult) -> None:
         f"[{result.repo}] {result.status}: {result.read_requests} GETs, "
         f"{result.not_modified_requests} not modified, "
         f"{result.planned_deliveries} planned, {result.enqueued} enqueued, "
-        f"{result.duplicates} duplicate; next {result.next_sync_at}{suffix}"
+        f"{result.duplicates} duplicate; checkpoint {result.checkpoint_resources} resources/"
+        f"{result.checkpoint_bytes} bytes, compacted {result.compacted_resources}; "
+        f"next {result.next_sync_at}{suffix}"
     )
 
 
-def _write_report(path: Path, result: SyncResult) -> None:
+def _write_report(path: Path, result: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
     path.write_text(
-        json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def _print_checkpoint_status(status: CheckpointInspection, freshness) -> None:  # noqa: ANN001
+    print(f"repository: {status.repo}")
+    print(f"source status: {freshness.source_status if freshness else 'unavailable'}")
+    print(
+        "last successful sync: "
+        f"{freshness.last_source_sync_at if freshness and freshness.last_source_sync_at else 'not recorded'}"
+    )
+    print(
+        "next sync: "
+        f"{freshness.next_source_sync_at if freshness and freshness.next_source_sync_at else 'not scheduled'}"
+    )
+    print(
+        f"last error: {freshness.source_error if freshness and freshness.source_error else 'none'}"
+    )
+    print(f"checkpoint state: {status.state}")
+    print(f"checkpoint version: {status.on_disk_version or 'none'}")
+    print(f"checkpoint resources: {status.resources}/{status.max_resources}")
+    print(f"checkpoint bytes: {status.bytes}/{status.max_bytes}")
+    print(f"checkpoint families: {status.families}")
+    print(f"resource kinds: {json.dumps(status.resource_kinds, sort_keys=True)}")
+    print(f"conditional responses: {status.conditional_responses}")
+    print(f"last observed: {status.last_observed_at or 'not recorded'}")
+    print(f"last compacted: {status.last_compacted_at or 'not recorded'}")
+    print(
+        "compacted total: "
+        f"{status.compacted_resources_total} resources/"
+        f"{status.compacted_families_total} families"
+    )
+    print(f"last-good state: {status.last_good_state} ({status.last_good_bytes} bytes)")
+    print(f"quarantine files: {status.quarantine_files}")
+    print(f"recovery records: {status.recovery_records}")
+    print(f"pending recoveries: {status.pending_recoveries}")
+    print(
+        "latest recovery: "
+        f"{status.latest_recovery_status or 'none'}"
+        f" at {status.latest_recovery_at or 'not recorded'}"
+    )
+    if status.error:
+        print(f"checkpoint error: {status.error}")
+    if status.last_good_error:
+        print(f"last-good error: {status.last_good_error}")
+
+
+def _print_recovery(result: CheckpointRecoveryResult) -> None:
+    print(f"repository: {result.repo}")
+    print(f"recovery action: {result.action}")
+    print(f"outcome: {result.outcome}")
+    print(f"primary: {result.primary_path}")
+    print(f"source: {result.source_path or 'empty v2 baseline'}")
+    print(f"quarantine: {result.quarantine_path or 'not required'}")
+    print(f"audit: {result.audit_path or 'not written'}")
+    print(f"warning: {result.warning}")
 
 
 def main() -> None:
@@ -50,7 +118,26 @@ def main() -> None:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="run one poll (the default)")
     mode.add_argument("--loop", action="store_true", help="run the fixed scheduled loop")
-    parser.add_argument("--status", action="store_true", help="show source checkpoint status")
+    mode.add_argument("--status", action="store_true", help="show source checkpoint status")
+    mode.add_argument(
+        "--recover-checkpoint",
+        action="store_true",
+        help="restore the verified last-good checkpoint",
+    )
+    mode.add_argument(
+        "--rebaseline-checkpoint",
+        action="store_true",
+        help="quarantine the primary and install an empty v2 checkpoint",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="describe checkpoint recovery without changing files",
+    )
+    parser.add_argument(
+        "--confirm-repo",
+        help="exact owner/name confirmation required for mutating recovery",
+    )
     parser.add_argument(
         "--expect-noop", action="store_true", help="fail unless no delivery is planned"
     )
@@ -66,10 +153,35 @@ def main() -> None:
     parser.add_argument("--dependency-max-pages", type=int, default=10)
     parser.add_argument("--http-attempts", type=int, default=3)
     parser.add_argument("--http-backoff-seconds", type=float, default=1.0)
+    parser.add_argument(
+        "--checkpoint-open-retention-seconds",
+        type=int,
+        default=DEFAULT_OPEN_RETENTION_SECONDS,
+    )
+    parser.add_argument(
+        "--checkpoint-closed-retention-seconds",
+        type=int,
+        default=DEFAULT_CLOSED_RETENTION_SECONDS,
+    )
+    parser.add_argument(
+        "--checkpoint-max-resources",
+        type=int,
+        default=DEFAULT_MAX_CHECKPOINT_RESOURCES,
+    )
+    parser.add_argument(
+        "--checkpoint-max-bytes",
+        type=int,
+        default=DEFAULT_MAX_CHECKPOINT_BYTES,
+    )
     args = parser.parse_args()
 
+    recovery_mode = args.recover_checkpoint or args.rebaseline_checkpoint
     if args.loop and (args.expect_noop or args.json_output):
         parser.error("--expect-noop and --json-output are single-run options")
+    if (args.dry_run or args.confirm_repo) and not recovery_mode:
+        parser.error("--dry-run and --confirm-repo apply only to checkpoint recovery")
+    if (args.status or recovery_mode) and args.expect_noop:
+        parser.error("--expect-noop applies only to a synchronization poll")
 
     settings = load_settings()
     interval_seconds = (
@@ -90,21 +202,56 @@ def main() -> None:
             dependency_max_pages=args.dependency_max_pages,
             http_attempts=args.http_attempts,
             http_backoff_seconds=args.http_backoff_seconds,
+            checkpoint_open_retention_seconds=args.checkpoint_open_retention_seconds,
+            checkpoint_closed_retention_seconds=args.checkpoint_closed_retention_seconds,
+            checkpoint_max_resources=args.checkpoint_max_resources,
+            checkpoint_max_bytes=args.checkpoint_max_bytes,
         )
     except ValueError as exc:
         parser.error(str(exc))
 
     if args.status:
         paths = repo_paths(settings.repo_data_dir, args.repo)
-        freshness = read_freshness(paths.freshness, paths.repo)
-        checkpoint = read_sync_state(paths.sync_state, paths.repo)
-        print(f"repository: {paths.repo}")
-        print(f"source status: {freshness.source_status}")
-        print(f"last successful sync: {freshness.last_source_sync_at or 'not recorded'}")
-        print(f"next sync: {freshness.next_source_sync_at or 'not scheduled'}")
-        print(f"last error: {freshness.source_error or 'none'}")
-        print(f"checkpoint resources: {len(checkpoint.resources)}")
-        print(f"conditional responses: {len(checkpoint.request_cache)}")
+        try:
+            freshness = read_freshness(paths.freshness, paths.repo)
+        except Exception as exc:
+            freshness = None
+            print(f"freshness error: {type(exc).__name__}: {exc}")
+        checkpoint = inspect_sync_checkpoint(
+            paths.sync_state,
+            paths.repo,
+            config.checkpoint_policy,
+        )
+        _print_checkpoint_status(checkpoint, freshness)
+        if args.json_output:
+            _write_report(args.json_output, checkpoint)
+        recovery_required = (
+            checkpoint.state == "corrupt"
+            or checkpoint.pending_recoveries
+            or (checkpoint.state == "missing" and checkpoint.last_good_state != "missing")
+        )
+        if recovery_required:
+            raise SystemExit(2)
+        return
+
+    if recovery_mode:
+        paths = repo_paths(settings.repo_data_dir, args.repo)
+        action: RecoveryAction = (
+            "restore_last_good" if args.recover_checkpoint else "rebaseline"
+        )
+        try:
+            recovery = recover_sync_checkpoint(
+                paths.sync_state,
+                paths.repo,
+                action=action,
+                dry_run=args.dry_run,
+                confirm_repo=args.confirm_repo,
+            )
+        except SyncCheckpointError as exc:
+            raise SystemExit(f"checkpoint recovery refused: {exc}") from None
+        _print_recovery(recovery)
+        if args.json_output:
+            _write_report(args.json_output, recovery)
         return
 
     paths = RepoRegistry(settings.repo_data_dir, settings.github_repos).register(args.repo)
