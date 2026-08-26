@@ -70,6 +70,33 @@ wait_http() {
   return 1
 }
 
+wait_service_healthy() {
+  local service="$1"
+  local container_id=""
+  local status=""
+  for _ in $(seq 1 60); do
+    container_id="$(compose ps --all --quiet "${service}")"
+    if [[ -n "${container_id}" ]]; then
+      status="$(docker inspect --format \
+        '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+        "${container_id}" 2>/dev/null || true)"
+      if [[ "${status}" == "healthy" ]]; then
+        return 0
+      fi
+      if [[ "${status}" == "exited" || "${status}" == "dead" ]]; then
+        compose logs "${service}" >&2 || true
+        echo "${service} stopped before becoming healthy: ${status}" >&2
+        return 1
+      fi
+    fi
+    sleep 1
+  done
+  compose ps "${service}" >&2 || true
+  compose logs "${service}" >&2 || true
+  echo "timed out waiting for ${service} to become healthy: ${status}" >&2
+  return 1
+}
+
 compose --profile live --profile ops config --format json >"${smoke_root}/compose.json"
 "${project_root}/.venv/bin/python" "${project_root}/scripts/check_compose_contract.py" \
   "${smoke_root}/compose.json" 2>/dev/null \
@@ -121,9 +148,12 @@ compose restart receiver viewer proxy
 wait_http "http://127.0.0.1:18080/" 200
 compose run --rm --no-deps worker python scripts/process_webhooks.py \
   --repo trustgraph-ai/trustgraph --once
+worker_status="$(compose run --rm --no-deps worker python scripts/process_webhooks.py \
+  --repo trustgraph-ai/trustgraph --status)"
+printf '%s\n' "${worker_status}"
+grep -q 'succeeded: 1' <<<"${worker_status}"
 compose start worker
-compose exec --no-TTY worker python scripts/process_webhooks.py \
-  --repo trustgraph-ai/trustgraph --status | grep -q 'succeeded: 1'
+wait_service_healthy worker
 compose exec --no-TTY worker python scripts/operations_readiness.py \
   worker --repo trustgraph-ai/trustgraph
 
@@ -154,6 +184,7 @@ compose --profile ops run --rm backup \
 test "$(sha256sum "${state_path}" | awk '{print $1}')" = "${state_hash}"
 compose start receiver worker viewer proxy
 wait_http "http://127.0.0.1:18080/" 200
+wait_service_healthy worker
 compose exec --no-TTY worker python scripts/operations_readiness.py \
   worker --repo trustgraph-ai/trustgraph
 
