@@ -1,0 +1,27 @@
+{$SITE_ADDRESS::8080} {
+	encode zstd gzip
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		X-Frame-Options DENY
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
+	route /webhooks/github {
+		request_body {
+			max_size 25MB
+		}
+		reverse_proxy receiver:8000
+	}
+
+	route {
+		reverse_proxy viewer:8501
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Mapping
 
+from issue_graphrag.live.backup import pending_restore_count
 from issue_graphrag.live.inbox import DeliveryConflict, DeliveryInbox
 from issue_graphrag.live.operations import probe_writable_directory
 from issue_graphrag.live.records import supports_event
+from issue_graphrag.live.repositories import repo_directory_name
 from issue_graphrag.live.timeutil import now_utc, to_iso
 from issue_graphrag.live.webhook import (
     WebhookAuthenticationError,
@@ -54,6 +56,12 @@ class WebhookReceiver:
         try:
             self.inbox.count()
             probe_writable_directory(self.inbox.path.parent)
+            lane = self.inbox.path.parent
+            if (
+                lane.name == repo_directory_name(self.repo)
+                and pending_restore_count(lane.parent, self.repo)
+            ):
+                raise OSError("repository restore is incomplete")
         except Exception:
             return WebhookResponse(503, {"status": "unavailable"})
         return WebhookResponse(200, {"status": "ready"})

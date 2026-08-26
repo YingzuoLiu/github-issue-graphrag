@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import sqlite3
 import tempfile
 import threading
 from pathlib import Path
@@ -37,6 +38,10 @@ def validate_public_viewer(settings: Settings) -> None:
         raise ValueError(
             "public Viewer must not receive credentials: " + ", ".join(exposed)
         )
+    repo_root = settings.repo_data_dir.resolve()
+    analytics = settings.radar_analytics_path.resolve()
+    if analytics == repo_root or repo_root in analytics.parents:
+        raise ValueError("public Viewer analytics must be outside the read-only repository data")
 
 
 def probe_readable_path(path: Path) -> None:
@@ -70,6 +75,17 @@ def probe_writable_directory(path: Path) -> None:
     finally:
         if probe is not None and probe.exists():
             probe.unlink()
+
+
+def probe_sqlite_readable(path: Path) -> None:
+    database = Path(path)
+    if not database.is_file():
+        raise OSError(f"required SQLite database does not exist: {database}")
+    uri = f"file:{database.resolve().as_posix()}?mode=ro"
+    with sqlite3.connect(uri, uri=True, timeout=2) as connection:
+        result = connection.execute("PRAGMA quick_check(1)").fetchone()
+    if result is None or result[0] != "ok":
+        raise OSError(f"SQLite quick_check failed: {database}")
 
 
 def install_shutdown_handlers(stop_event: threading.Event) -> Callable[[], None]:

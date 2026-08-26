@@ -67,6 +67,11 @@ def test_secrets_can_come_from_files_but_never_both_sources(monkeypatch, tmp_pat
     with pytest.raises(ValueError, match="set only one"):
         load_settings()
 
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN_FILE", str(tmp_path / "missing-token"))
+    with pytest.raises(ValueError, match="readable regular file"):
+        load_settings()
+
 
 def test_public_viewer_rejects_credentials_and_has_separate_analytics(monkeypatch, tmp_path):
     analytics = tmp_path / "analytics" / "radar.sqlite"
@@ -82,6 +87,18 @@ def test_public_viewer_rejects_credentials_and_has_separate_analytics(monkeypatc
 
     monkeypatch.setenv("GITHUB_TOKEN", "must-not-reach-viewer")
     with pytest.raises(ValueError, match="public Viewer must not receive credentials"):
+        validate_public_viewer(load_settings())
+
+
+def test_public_viewer_rejects_analytics_inside_repository_data(monkeypatch, tmp_path):
+    monkeypatch.setenv("PUBLIC_RADAR_ONLY", "1")
+    monkeypatch.setenv("REPO_DATA_DIR", str(tmp_path / "repos"))
+    monkeypatch.setenv(
+        "RADAR_ANALYTICS_PATH",
+        str(tmp_path / "repos" / "radar_analytics.sqlite"),
+    )
+
+    with pytest.raises(ValueError, match="analytics must be outside"):
         validate_public_viewer(load_settings())
 
 

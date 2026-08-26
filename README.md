@@ -578,7 +578,8 @@ python scripts/replay_events.py \
 
 `fetch_live_seed.py` keeps pull requests, comments and changed files, which
 `fetch_github_issues.py` deliberately drops. `--llm` swaps the offline fixture extractor for the
-configured provider.
+configured provider. Bootstrap now shares the same fail-closed, counted read-only HTTP boundary as
+the worker and synchronizer; its CLI prints measured GitHub read/write counts.
 
 ### The five properties this has to satisfy
 
@@ -689,6 +690,29 @@ separate durable job; provider, cache, or quota failure cannot roll back that so
 it into a failed GitHub delivery. Run `--rules fixtures/live_demo/extraction_rules.json` for
 deterministic rules, omit both extraction flags for GitHub facts only, or use `--llm` for the
 configured model.
+
+### Provider-neutral deployment foundation
+
+The repository includes a non-root application image, a six-service Compose topology and a Caddy
+HTTP foundation. Only the proxy publishes a port. Public Viewer mode exposes Contribution Radar
+only, receives no GitHub/LLM credentials, mounts repo data read-only and writes anonymous analytics
+to a separate mount. Receiver liveness and durable readiness are distinct, daemon loops stop
+cooperatively on `SIGTERM`, and the one-shot operations container provides validated,
+operator-confirmed backup and restore.
+
+```bash
+cp .env.deploy.example .env.deploy
+docker compose --env-file .env.deploy --profile live --profile ops \
+  config --format json > /tmp/issue-graphrag-compose.json
+python scripts/check_compose_contract.py /tmp/issue-graphrag-compose.json
+docker compose --env-file .env.deploy up --build -d receiver worker viewer proxy
+```
+
+This is deliberately not a public-cloud apply: the checked-in Caddy address is local HTTP. TLS,
+rate/connection limits, provider volumes, production secrets, cost ceiling and teardown require
+the separate pre-apply operational review. See
+[`docs/deployment-operations.md`](docs/deployment-operations.md) for the exact credential matrix,
+health semantics, restart proof and backup/restore runbook.
 
 Live `--llm` is intentionally stricter than the older offline batch scripts. It requires
 `LLM_PROVIDER=openrouter`, sends the exact requested model with strict JSON Schema output and

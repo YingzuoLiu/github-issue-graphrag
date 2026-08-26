@@ -5,6 +5,7 @@ from typing import Any
 
 import requests
 
+from issue_graphrag.http_boundary import CountingSession
 from issue_graphrag.models import SourceDocument
 
 
@@ -18,14 +19,27 @@ def parse_repo(repo: str) -> tuple[str, str]:
     return match.group("owner"), match.group("repo")
 
 
-def fetch_issues(repo: str, token: str | None = None, state: str = "open", per_page: int = 30) -> list[dict[str, Any]]:
+def _read_only_session(session: Any | None = None) -> CountingSession:
+    if isinstance(session, CountingSession):
+        return session
+    return CountingSession(session or requests.Session())
+
+
+def fetch_issues(
+    repo: str,
+    token: str | None = None,
+    state: str = "open",
+    per_page: int = 30,
+    *,
+    session: Any | None = None,
+) -> list[dict[str, Any]]:
     owner, name = parse_repo(repo)
     url = f"https://api.github.com/repos/{owner}/{name}/issues"
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    response = requests.get(
+    response = _read_only_session(session).get(
         url,
         headers=headers,
         params={"state": state, "per_page": per_page},
@@ -71,8 +85,19 @@ def _headers(token: str | None) -> dict[str, str]:
     return headers
 
 
-def _get(url: str, token: str | None, params: dict[str, Any] | None = None) -> Any:
-    response = requests.get(url, headers=_headers(token), params=params or {}, timeout=30)
+def _get(
+    url: str,
+    token: str | None,
+    params: dict[str, Any] | None = None,
+    *,
+    session: Any | None = None,
+) -> Any:
+    response = _read_only_session(session).get(
+        url,
+        headers=_headers(token),
+        params=params or {},
+        timeout=30,
+    )
     response.raise_for_status()
     return response.json()
 
@@ -84,6 +109,7 @@ def _paginate(
     limit: int,
     max_pages: int,
     params: dict[str, Any] | None = None,
+    session: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch bounded GitHub list pages without silently dropping page two."""
     if limit < 0:
@@ -100,6 +126,7 @@ def _paginate(
             url,
             token,
             {**(params or {}), "per_page": per_page, "page": page},
+            session=session,
         )
         if not isinstance(payload, list):
             raise ValueError(f"GitHub returned a non-list payload for {url}")
@@ -116,6 +143,8 @@ def fetch_issues_and_pulls(
     state: str = "all",
     limit: int = 30,
     max_pages: int = 10,
+    *,
+    session: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch issues *and* pull requests.
 
@@ -132,6 +161,7 @@ def fetch_issues_and_pulls(
         limit=limit,
         max_pages=max_pages,
         params={"state": state},
+        session=session,
     )
 
 
@@ -142,16 +172,27 @@ def fetch_comments(
     *,
     limit: int = 300,
     max_pages: int = 10,
+    session: Any | None = None,
 ) -> list[dict[str, Any]]:
     owner, name = parse_repo(repo)
     url = f"https://api.github.com/repos/{owner}/{name}/issues/{number}/comments"
-    return _paginate(url, token, limit=limit, max_pages=max_pages)
+    return _paginate(url, token, limit=limit, max_pages=max_pages, session=session)
 
 
-def fetch_pull_request(repo: str, number: int, token: str | None = None) -> dict[str, Any]:
+def fetch_pull_request(
+    repo: str,
+    number: int,
+    token: str | None = None,
+    *,
+    session: Any | None = None,
+) -> dict[str, Any]:
     """The issues endpoint omits merged state, so pull requests need a second call."""
     owner, name = parse_repo(repo)
-    return _get(f"https://api.github.com/repos/{owner}/{name}/pulls/{number}", token)
+    return _get(
+        f"https://api.github.com/repos/{owner}/{name}/pulls/{number}",
+        token,
+        session=session,
+    )
 
 
 def fetch_pull_request_files(
@@ -161,10 +202,11 @@ def fetch_pull_request_files(
     *,
     limit: int = 3000,
     max_pages: int = 30,
+    session: Any | None = None,
 ) -> list[str]:
     owner, name = parse_repo(repo)
     url = f"https://api.github.com/repos/{owner}/{name}/pulls/{number}/files"
-    rows = _paginate(url, token, limit=limit, max_pages=max_pages)
+    rows = _paginate(url, token, limit=limit, max_pages=max_pages, session=session)
     return sorted({str(entry["filename"]) for entry in rows if entry.get("filename")})
 
 
@@ -257,9 +299,11 @@ def build_live_seed(
     comment_max_pages: int = 10,
     file_limit_per_pull: int = 3000,
     file_max_pages: int = 30,
+    session: Any | None = None,
 ) -> dict[str, Any]:
     """Build a live-index snapshot: issues, pull requests, comments and files."""
     items: list[dict[str, Any]] = []
+    read_only = _read_only_session(session)
 
     for raw in fetch_issues_and_pulls(
         repo,
@@ -267,6 +311,7 @@ def build_live_seed(
         state=state,
         limit=limit,
         max_pages=item_max_pages,
+        session=read_only,
     ):
         number = raw["number"]
         is_pull = "pull_request" in raw
@@ -277,13 +322,14 @@ def build_live_seed(
                 token,
                 limit=comment_limit_per_item,
                 max_pages=comment_max_pages,
+                session=read_only,
             )
             if with_comments
             else []
         )
 
         if is_pull:
-            detail = fetch_pull_request(repo, number, token)
+            detail = fetch_pull_request(repo, number, token, session=read_only)
             files = (
                 fetch_pull_request_files(
                     repo,
@@ -291,6 +337,7 @@ def build_live_seed(
                     token,
                     limit=file_limit_per_pull,
                     max_pages=file_max_pages,
+                    session=read_only,
                 )
                 if with_files
                 else []

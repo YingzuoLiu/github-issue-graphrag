@@ -20,63 +20,55 @@ class FakeResponse:
         return self.payload
 
 
-def test_bootstrap_comments_follow_pagination_and_explicit_caps(monkeypatch):
+class FakeSession:
+    def __init__(self, pages):  # noqa: ANN001
+        self.pages = list(pages)
+        self.calls = []
+
+    def get(self, url, **kwargs):  # noqa: ANN001, ANN201
+        self.calls.append((url, kwargs))
+        return FakeResponse(self.pages.pop(0))
+
+
+def test_bootstrap_comments_follow_pagination_and_explicit_caps():
     pages = [
         [{"id": index} for index in range(100)],
         [{"id": 100}],
     ]
-    calls = []
+    session = FakeSession(pages)
 
-    def fake_get(url, **kwargs):  # noqa: ANN001, ANN201
-        calls.append((url, kwargs))
-        return FakeResponse(pages.pop(0))
-
-    monkeypatch.setattr("issue_graphrag.ingest.github_loader.requests.get", fake_get)
-
-    comments = fetch_comments(REPO, 1, limit=101, max_pages=2)
+    comments = fetch_comments(REPO, 1, limit=101, max_pages=2, session=session)
 
     assert len(comments) == 101
-    assert [call[1]["params"]["page"] for call in calls] == [1, 2]
-    assert [call[1]["params"]["per_page"] for call in calls] == [100, 1]
+    assert [call[1]["params"]["page"] for call in session.calls] == [1, 2]
+    assert [call[1]["params"]["per_page"] for call in session.calls] == [100, 1]
 
 
-def test_bootstrap_items_follow_pagination_and_stop_at_the_declared_limit(monkeypatch):
+def test_bootstrap_items_follow_pagination_and_stop_at_the_declared_limit():
     pages = [
         [{"number": index} for index in range(100)],
         [{"number": 100}, {"number": 101}],
     ]
-    calls = []
+    session = FakeSession(pages)
 
-    def fake_get(url, **kwargs):  # noqa: ANN001, ANN201
-        calls.append((url, kwargs))
-        return FakeResponse(pages.pop(0))
-
-    monkeypatch.setattr("issue_graphrag.ingest.github_loader.requests.get", fake_get)
-
-    items = fetch_issues_and_pulls(REPO, limit=101, max_pages=2)
+    items = fetch_issues_and_pulls(REPO, limit=101, max_pages=2, session=session)
 
     assert len(items) == 101
-    assert [call[1]["params"]["page"] for call in calls] == [1, 2]
-    assert [call[1]["params"]["per_page"] for call in calls] == [100, 1]
-    assert all(call[1]["params"]["state"] == "all" for call in calls)
+    assert [call[1]["params"]["page"] for call in session.calls] == [1, 2]
+    assert [call[1]["params"]["per_page"] for call in session.calls] == [100, 1]
+    assert all(call[1]["params"]["state"] == "all" for call in session.calls)
 
 
-def test_bootstrap_pull_files_follow_pagination_and_are_canonicalized(monkeypatch):
+def test_bootstrap_pull_files_follow_pagination_and_are_canonicalized():
     pages = [
         [{"filename": f"src/{index}.py"} for index in range(100)],
         [{"filename": "README.md"}, {"filename": "README.md"}],
     ]
-    calls = []
+    session = FakeSession(pages)
 
-    def fake_get(url, **kwargs):  # noqa: ANN001, ANN201
-        calls.append((url, kwargs))
-        return FakeResponse(pages.pop(0))
-
-    monkeypatch.setattr("issue_graphrag.ingest.github_loader.requests.get", fake_get)
-
-    files = fetch_pull_request_files(REPO, 2, limit=102, max_pages=2)
+    files = fetch_pull_request_files(REPO, 2, limit=102, max_pages=2, session=session)
 
     assert len(files) == 101
     assert files == sorted(set(files))
-    assert [call[1]["params"]["page"] for call in calls] == [1, 2]
-    assert [call[1]["params"]["per_page"] for call in calls] == [100, 2]
+    assert [call[1]["params"]["page"] for call in session.calls] == [1, 2]
+    assert [call[1]["params"]["per_page"] for call in session.calls] == [100, 2]

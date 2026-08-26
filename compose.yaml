@@ -1,0 +1,211 @@
+x-app: &app
+  build:
+    context: .
+  image: github-issue-graphrag:0.4.0-dev
+  init: true
+  read_only: true
+  restart: unless-stopped
+  stop_grace_period: 30s
+  tmpfs:
+    - /tmp:mode=1777
+  environment: &common-environment
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONUNBUFFERED: "1"
+    REPO_DATA_DIR: /var/lib/issue-graphrag/repos
+    GITHUB_REPOS: ${GITHUB_REPO:?Set GITHUB_REPO to owner/name}
+    GITHUB_WEBHOOK_REPO: ${GITHUB_REPO:?Set GITHUB_REPO to owner/name}
+
+services:
+  receiver:
+    <<: *app
+    command:
+      - python
+      - scripts/serve_webhooks.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      <<: *common-environment
+      GITHUB_WEBHOOK_SECRET_FILE: /run/secrets/github_webhook_secret
+    secrets:
+      - github_webhook_secret
+    volumes:
+      - type: bind
+        source: ${REPO_DATA_HOST:-./deploy-data/repos}
+        target: /var/lib/issue-graphrag/repos
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2).read()
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  worker:
+    <<: *app
+    command:
+      - python
+      - scripts/process_webhooks.py
+      - --repo
+      - ${GITHUB_REPO:?Set GITHUB_REPO to owner/name}
+    environment:
+      <<: *common-environment
+      GITHUB_TOKEN_FILE: /run/secrets/github_token
+      LLM_PROVIDER: mock
+    secrets:
+      - github_token
+    volumes:
+      - type: bind
+        source: ${REPO_DATA_HOST:-./deploy-data/repos}
+        target: /var/lib/issue-graphrag/repos
+    depends_on:
+      receiver:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - scripts/operations_readiness.py
+        - worker
+        - --repo
+        - ${GITHUB_REPO:?Set GITHUB_REPO to owner/name}
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  sync:
+    <<: *app
+    profiles:
+      - live
+    command:
+      - python
+      - scripts/sync_repositories.py
+      - ${GITHUB_REPO:?Set GITHUB_REPO to owner/name}
+      - --loop
+    environment:
+      <<: *common-environment
+      GITHUB_TOKEN_FILE: /run/secrets/github_token
+      LLM_PROVIDER: mock
+    secrets:
+      - github_token
+    volumes:
+      - type: bind
+        source: ${REPO_DATA_HOST:-./deploy-data/repos}
+        target: /var/lib/issue-graphrag/repos
+    depends_on:
+      receiver:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - scripts/operations_readiness.py
+        - sync
+        - --repo
+        - ${GITHUB_REPO:?Set GITHUB_REPO to owner/name}
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  viewer:
+    <<: *app
+    command:
+      - streamlit
+      - run
+      - app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+    environment:
+      <<: *common-environment
+      PUBLIC_RADAR_ONLY: "1"
+      RADAR_ANALYTICS_PATH: /var/lib/issue-graphrag/analytics/radar.sqlite
+      LLM_PROVIDER: mock
+    volumes:
+      - type: bind
+        source: ${REPO_DATA_HOST:-./deploy-data/repos}
+        target: /var/lib/issue-graphrag/repos
+        read_only: true
+      - type: bind
+        source: ${RADAR_ANALYTICS_HOST:-./deploy-data/analytics}
+        target: /var/lib/issue-graphrag/analytics
+    expose:
+      - "8501"
+    depends_on:
+      receiver:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=2).read()"
+          && python scripts/operations_readiness.py viewer
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  proxy:
+    image: caddy:2.10.2-alpine
+    init: true
+    read_only: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:8080}
+    ports:
+      - target: 8080
+        published: ${PUBLIC_HTTP_PORT:-8080}
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ./Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+    tmpfs:
+      - /config
+      - /data
+      - /tmp
+    depends_on:
+      receiver:
+        condition: service_healthy
+      viewer:
+        condition: service_healthy
+
+  backup:
+    <<: *app
+    profiles:
+      - ops
+    entrypoint:
+      - python
+      - scripts/backup_runtime.py
+    environment:
+      <<: *common-environment
+      RADAR_ANALYTICS_PATH: /var/lib/issue-graphrag/analytics/radar.sqlite
+      LLM_PROVIDER: mock
+    volumes:
+      - type: bind
+        source: ${REPO_DATA_HOST:-./deploy-data/repos}
+        target: /var/lib/issue-graphrag/repos
+      - type: bind
+        source: ${RADAR_ANALYTICS_HOST:-./deploy-data/analytics}
+        target: /var/lib/issue-graphrag/analytics
+      - type: bind
+        source: ${BACKUP_DATA_HOST:-./backups}
+        target: /var/lib/issue-graphrag/backups
+    restart: "no"
+
+secrets:
+  github_token:
+    file: ${GITHUB_TOKEN_FILE_HOST:-./secrets/github_token}
+  github_webhook_secret:
+    file: ${GITHUB_WEBHOOK_SECRET_FILE_HOST:-./secrets/github_webhook_secret}

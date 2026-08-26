@@ -8,6 +8,7 @@ import threading
 from conftest import REPO, issue_payload
 
 from issue_graphrag.live.inbox import DeliveryInbox
+from issue_graphrag.live.repositories import RepoRegistry, repo_directory_name
 from issue_graphrag.live.server import WebhookReceiver, create_http_server
 from issue_graphrag.live.webhook import compute_signature
 
@@ -194,6 +195,23 @@ def test_liveness_stays_up_when_durable_readiness_fails(tmp_path, monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_receiver_is_not_ready_during_an_incomplete_restore(tmp_path):
+    paths = RepoRegistry(tmp_path).register(REPO)
+    inbox = DeliveryInbox(paths.inbox)
+    audit = (
+        tmp_path
+        / ".operations"
+        / "restores"
+        / repo_directory_name(REPO)
+        / "pending.json"
+    )
+    audit.parent.mkdir(parents=True)
+    audit.write_text('{"status":"planned"}\n', encoding="utf-8")
+    receiver = WebhookReceiver(secret=SECRET, repo=REPO, inbox=inbox)
+
+    assert receiver.readiness().status_code == 503
 
 
 def test_http_adapter_times_out_an_incomplete_request_body(tmp_path):
