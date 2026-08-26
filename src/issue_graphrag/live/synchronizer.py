@@ -997,10 +997,15 @@ def run_synchronizer_loop(
     on_result: Callable[[SyncResult], None],
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], datetime] = now_utc,
+    should_stop: Callable[[], bool] = lambda: False,
+    wait: Callable[[float], object] | None = None,
 ) -> None:
     """Run fixed-schedule polls while respecting a rate-limit retry timestamp."""
     while True:
+        if should_stop():
+            return
         result = synchronizer.sync_once()
         on_result(result)
         remaining = (parse_iso(result.next_sync_at) - clock()).total_seconds()
-        sleep(max(0.0, remaining))
+        delay = max(0.0, remaining)
+        wait(delay) if wait is not None else sleep(delay)

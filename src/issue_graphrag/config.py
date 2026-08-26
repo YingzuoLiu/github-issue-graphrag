@@ -32,6 +32,7 @@ class Settings:
     raw_data_dir: Path
     processed_data_dir: Path
     repo_data_dir: Path
+    radar_analytics_path: Path
     vector_db_path: Path
     vector_collection: str
     github_token: str | None
@@ -39,6 +40,21 @@ class Settings:
     github_sync_interval_seconds: int
     github_webhook_repo: str | None
     github_webhook_secret: str | None
+    public_radar_only: bool
+
+
+def _secret(name: str) -> str | None:
+    """Read one secret from the environment or an explicitly named file."""
+    value = os.getenv(name)
+    file_value = os.getenv(f"{name}_FILE")
+    if value and file_value:
+        raise ValueError(f"set only one of {name} or {name}_FILE")
+    if file_value:
+        path = Path(file_value)
+        if not path.is_file():
+            raise ValueError(f"{name}_FILE must name a readable regular file")
+        value = path.read_text(encoding="utf-8").rstrip("\r\n")
+    return value or None
 
 
 def load_settings(env_file: str | None = None) -> Settings:
@@ -72,14 +88,26 @@ def load_settings(env_file: str | None = None) -> Settings:
             raise ValueError(f"{name} must be {qualifier}")
         return value
 
+    def boolean(name: str, default: bool) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        normalized = raw.strip().casefold()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(f"{name} must be true or false")
+
     llm_provider = os.getenv("LLM_PROVIDER", "mock")
     default_base_url = "https://openrouter.ai/api/v1" if llm_provider == "openrouter" else None
     default_model = "google/gemini-3.1-flash-lite" if llm_provider == "openrouter" else None
 
+    repo_data_dir = Path(os.getenv("REPO_DATA_DIR", "data/repos"))
     return Settings(
         llm_provider=llm_provider,
         llm_base_url=os.getenv("LLM_BASE_URL") or default_base_url,
-        llm_api_key=os.getenv("LLM_API_KEY") or None,
+        llm_api_key=_secret("LLM_API_KEY"),
         llm_model=os.getenv("LLM_MODEL") or default_model,
         llm_daily_calls=integer("LLM_DAILY_CALLS", 250),
         llm_daily_input_tokens=integer("LLM_DAILY_INPUT_TOKENS", 300_000),
@@ -107,14 +135,18 @@ def load_settings(env_file: str | None = None) -> Settings:
         embedding_model=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
         raw_data_dir=Path(os.getenv("RAW_DATA_DIR", "data/raw")),
         processed_data_dir=Path(os.getenv("PROCESSED_DATA_DIR", "data/processed")),
-        repo_data_dir=Path(os.getenv("REPO_DATA_DIR", "data/repos")),
+        repo_data_dir=repo_data_dir,
+        radar_analytics_path=Path(
+            os.getenv("RADAR_ANALYTICS_PATH", str(repo_data_dir / "radar_analytics.sqlite"))
+        ),
         vector_db_path=Path(os.getenv("VECTOR_DB_PATH", "data/processed/qdrant")),
         vector_collection=os.getenv("VECTOR_COLLECTION", "issue_graphrag"),
-        github_token=os.getenv("GITHUB_TOKEN") or None,
+        github_token=_secret("GITHUB_TOKEN"),
         github_repos=configured_repos,
         github_sync_interval_seconds=integer(
             "GITHUB_SYNC_INTERVAL_SECONDS", 900, positive=True
         ),
         github_webhook_repo=webhook_repo,
-        github_webhook_secret=os.getenv("GITHUB_WEBHOOK_SECRET") or None,
+        github_webhook_secret=_secret("GITHUB_WEBHOOK_SECRET"),
+        public_radar_only=boolean("PUBLIC_RADAR_ONLY", False),
     )

@@ -12,6 +12,7 @@ from issue_graphrag.live.analytics import RadarAnalytics, safe_record
 from issue_graphrag.live.contribution import opportunities
 from issue_graphrag.live.history import timeline
 from issue_graphrag.live.ontology import describe
+from issue_graphrag.live.operations import validate_public_viewer
 from issue_graphrag.live.projection import event_subgraph, project_graph
 from issue_graphrag.live.radar import (
     RadarChange,
@@ -197,7 +198,7 @@ def _track(
 ) -> None:
     settings = load_settings()
     safe_record(
-        RadarAnalytics(settings.repo_data_dir / "radar_analytics.sqlite"),
+        RadarAnalytics(settings.radar_analytics_path),
         event_name=event_name,
         anonymous_session=_anonymous_session(),
         repo=repo,
@@ -1014,11 +1015,14 @@ def render_inspection_page() -> None:
 
 
 def main() -> None:
+    settings = load_settings()
+    validate_public_viewer(settings)
     st.set_page_config(page_title="Contribution Radar", page_icon="🎯", layout="wide")
     render_shell_css()
     with st.sidebar:
         st.markdown("### Contribution Radar")
-        page = st.radio("Navigate", NAVIGATION, label_visibility="collapsed")
+        navigation = NAVIGATION[:1] if settings.public_radar_only else NAVIGATION
+        page = st.radio("Navigate", navigation, label_visibility="collapsed")
         st.caption("Public browsing is read-only. GitHub remains the source of truth.")
         if page == "Ask (local demo)":
             st.divider()

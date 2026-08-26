@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import threading
 from pathlib import Path
 
 from issue_graphrag.config import load_settings
 from issue_graphrag.live.inbox import DeliveryInbox
+from issue_graphrag.live.operations import install_shutdown_handlers
 from issue_graphrag.live.repositories import RepoRegistry
 from issue_graphrag.live.server import (
     DEFAULT_MAX_BODY_BYTES,
@@ -63,11 +65,14 @@ def main() -> None:
     )
     print(f"Listening on http://{args.host}:{server.server_port}/webhooks/github")
     print(f"Accepting signed deliveries for {repo}; inbox: {inbox_path}")
+    stop_event = threading.Event()
+    restore_handlers = install_shutdown_handlers(stop_event)
+    server.timeout = 0.5
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
+        while not stop_event.is_set():
+            server.handle_request()
     finally:
+        restore_handlers()
         server.server_close()
 
 

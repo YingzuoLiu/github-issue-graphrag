@@ -538,6 +538,35 @@ def test_worker_loop_survives_an_iteration_failure_and_keeps_processing():
     assert sleeps == [1.0]
 
 
+def test_worker_loop_cooperatively_stops_during_idle_wait():
+    class IdleProcessor:
+        def __init__(self):
+            self.calls = 0
+
+        def process_one(self):
+            self.calls += 1
+            return None
+
+    processor = IdleProcessor()
+    stopped = False
+
+    def wait(delay):  # noqa: ANN001
+        nonlocal stopped
+        assert delay == 30
+        stopped = True
+
+    run_worker_loop(
+        processor,
+        poll_seconds=30,
+        on_result=lambda result: None,
+        on_error=lambda error: None,
+        should_stop=lambda: stopped,
+        wait=wait,
+    )
+
+    assert processor.calls == 1
+
+
 def test_partial_operational_batches_publish_nothing_until_document_is_complete(tmp_path):
     class StructuredClient:
         model = "google/gemini-3.1-flash-lite"

@@ -218,6 +218,25 @@ def test_radar_is_default_and_opens_traceable_issue_detail(
     assert paths.event_log.read_bytes() == event_log_before
 
 
+def test_public_mode_exposes_only_radar_and_writes_separate_analytics(
+    tmp_path, monkeypatch
+):
+    repo = "owner/public"
+    _write_repo(tmp_path / "repos", repo, _single_issue_state(repo, 11, "Public issue"))
+    _configure(monkeypatch, tmp_path / "repos", (repo,))
+    analytics_path = tmp_path / "analytics" / "radar.sqlite"
+    monkeypatch.setenv("PUBLIC_RADAR_ONLY", "1")
+    monkeypatch.setenv("RADAR_ANALYTICS_PATH", str(analytics_path))
+
+    app = _run()
+
+    assert not app.exception
+    assert app.sidebar.radio[0].options == ["Contribution Radar"]
+    assert "Ask (local demo)" not in _text(app)
+    assert analytics_path.exists()
+    assert not (tmp_path / "repos" / "radar_analytics.sqlite").exists()
+
+
 def test_repo_switch_discards_previous_cards_detail_and_counts(tmp_path, monkeypatch):
     alpha = "alpha/one"
     beta = "beta/two"

@@ -578,6 +578,8 @@ def run_worker_loop(
     on_result: Callable[[ProcessingResult], None],
     on_error: Callable[[Exception], None],
     sleep: Callable[[float], None] = time.sleep,
+    should_stop: Callable[[], bool] = lambda: False,
+    wait: Callable[[float], object] | None = None,
 ) -> None:
     """Supervise daemon iterations without swallowing an intentional shutdown.
 
@@ -589,13 +591,16 @@ def run_worker_loop(
         raise ValueError("poll_seconds must be non-negative")
 
     while True:
+        if should_stop():
+            return
         try:
             result = processor.process_one()
         except Exception as exc:
             on_error(exc)
-            sleep(max(1.0, poll_seconds))
+            delay = max(1.0, poll_seconds)
+            wait(delay) if wait is not None else sleep(delay)
             continue
         if result is None:
-            sleep(poll_seconds)
+            wait(poll_seconds) if wait is not None else sleep(poll_seconds)
         else:
             on_result(result)
