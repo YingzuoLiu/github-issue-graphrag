@@ -6,6 +6,15 @@ smoke_root="$(mktemp -d)"
 compose_project="graphrag-smoke-${RANDOM}"
 
 cleanup() {
+  if docker image inspect github-issue-graphrag:0.4.0-dev >/dev/null 2>&1; then
+    docker compose \
+      --project-directory "${project_root}" \
+      --project-name "${compose_project}" \
+      --env-file "${smoke_root}/smoke.env" \
+      --profile ops run --rm --no-deps --user root --entrypoint chmod backup \
+      -R a+rwX /var/lib/issue-graphrag/repos /var/lib/issue-graphrag/analytics \
+      /var/lib/issue-graphrag/backups >/dev/null 2>&1 || true
+  fi
   docker compose \
     --project-directory "${project_root}" \
     --project-name "${compose_project}" \
@@ -92,26 +101,29 @@ Path(sys.argv[2]).write_bytes(body)
 signature = hmac.new(b"smoke-webhook-secret", body, hashlib.sha256).hexdigest()
 Path(sys.argv[3]).write_text(f"sha256={signature}", encoding="utf-8")
 PY
-curl --fail-with-body --silent --show-error \
+webhook_response="$(curl --fail-with-body --silent --show-error \
   --request POST \
   --header 'Content-Type: application/json' \
   --header 'X-GitHub-Delivery: smoke-durable-1' \
   --header 'X-GitHub-Event: issue_comment' \
   --header "X-Hub-Signature-256: $(<"${smoke_root}/signature")" \
   --data-binary "@${smoke_root}/payload.json" \
-  http://127.0.0.1:18080/webhooks/github >/dev/null
+  http://127.0.0.1:18080/webhooks/github)"
+python - "${webhook_response}" <<'PY'
+import json
+import sys
+
+response = json.loads(sys.argv[1])
+if response.get("status") != "enqueued":
+    raise SystemExit(f"webhook was not durably enqueued: {response}")
+PY
 compose restart receiver viewer proxy
-compose start worker
 wait_http "http://127.0.0.1:18080/" 200
-for _ in $(seq 1 30); do
-  if compose exec --no-TTY worker python scripts/process_webhooks.py \
-    --repo trustgraph-ai/trustgraph --status | grep -q 'succeeded: 1'; then
-    delivery_processed=1
-    break
-  fi
-  sleep 1
-done
-test "${delivery_processed:-0}" = "1"
+compose run --rm --no-deps worker python scripts/process_webhooks.py \
+  --repo trustgraph-ai/trustgraph --once
+compose start worker
+compose exec --no-TTY worker python scripts/process_webhooks.py \
+  --repo trustgraph-ai/trustgraph --status | grep -q 'succeeded: 1'
 compose exec --no-TTY worker python scripts/operations_readiness.py \
   worker --repo trustgraph-ai/trustgraph
 
