@@ -172,17 +172,21 @@ compose exec --user root --no-TTY receiver \
 compose exec --no-TTY receiver python -c \
   "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz').read()"
 
-state_path="${smoke_root}/repos/trustgraph-ai__trustgraph/live_state.json"
-state_hash="$(sha256sum "${state_path}" | awk '{print $1}')"
+state_host_path="${smoke_root}/repos/trustgraph-ai__trustgraph/live_state.json"
+state_container_path="/var/lib/issue-graphrag/repos/trustgraph-ai__trustgraph/live_state.json"
+state_hash="$(compose --profile ops run --rm --no-deps --entrypoint sha256sum backup \
+  "${state_container_path}" | awk '{print $1}')"
 compose stop proxy viewer worker receiver
 compose --profile ops run --rm backup \
   backup trustgraph-ai/trustgraph /var/lib/issue-graphrag/backups/smoke \
   --confirm-services-stopped
-printf '%s\n' '{"corrupt": true}' >"${state_path}"
+printf '%s\n' '{"corrupt": true}' >"${state_host_path}"
 compose --profile ops run --rm backup \
   restore trustgraph-ai/trustgraph /var/lib/issue-graphrag/backups/smoke \
   --confirm-services-stopped --confirm-repo trustgraph-ai/trustgraph
-test "$(sha256sum "${state_path}" | awk '{print $1}')" = "${state_hash}"
+restored_hash="$(compose --profile ops run --rm --no-deps --entrypoint sha256sum backup \
+  "${state_container_path}" | awk '{print $1}')"
+test "${restored_hash}" = "${state_hash}"
 compose start receiver worker viewer proxy
 wait_http "http://127.0.0.1:18080/" 200
 wait_service_healthy worker
