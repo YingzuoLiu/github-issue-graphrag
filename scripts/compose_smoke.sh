@@ -162,12 +162,13 @@ compose exec --user root --no-TTY receiver \
 compose exec --no-TTY receiver python -c \
   "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/livez').read()"
 if compose exec --no-TTY receiver python -c \
-  "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz').read()"; then
+  "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz').read()" \
+  >/dev/null 2>&1; then
   echo "receiver readiness stayed healthy after durable storage became read-only" >&2
   exit 1
 fi
 compose exec --user root --no-TTY receiver \
-  chmod -R ugo+w /var/lib/issue-graphrag/repos/trustgraph-ai__trustgraph
+  chmod -R a+rwX /var/lib/issue-graphrag/repos/trustgraph-ai__trustgraph
 compose exec --no-TTY receiver python -c \
   "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz').read()"
 
