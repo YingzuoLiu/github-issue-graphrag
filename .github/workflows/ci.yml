@@ -29,3 +29,15 @@ jobs:
         run: python -m pytest -q
       - name: Run Ruff
         run: python -m ruff check .
+
+  operations-smoke:
+    name: Compose operations smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate build, boundaries, restart and restore
+        run: bash scripts/compose_smoke.sh

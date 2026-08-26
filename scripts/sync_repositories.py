@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
 from pathlib import Path
 
 from issue_graphrag.config import load_settings
 from issue_graphrag.live.inbox import DeliveryInbox
+from issue_graphrag.live.operations import install_shutdown_handlers
 from issue_graphrag.live.repositories import RepoRegistry, read_freshness, repo_paths
 from issue_graphrag.live.synchronizer import (
     ConditionalGitHubClient,
@@ -265,10 +267,17 @@ def main() -> None:
     )
 
     if args.loop:
+        stop_event = threading.Event()
+        restore_handlers = install_shutdown_handlers(stop_event)
         try:
-            run_synchronizer_loop(synchronizer, _print_result)
-        except KeyboardInterrupt:
-            pass
+            run_synchronizer_loop(
+                synchronizer,
+                _print_result,
+                should_stop=stop_event.is_set,
+                wait=stop_event.wait,
+            )
+        finally:
+            restore_handlers()
         return
 
     result = synchronizer.sync_once()

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from pathlib import Path
 
 from issue_graphrag.config import load_settings
 from issue_graphrag.live.events import EventLog
 from issue_graphrag.live.github_api import GitHubClient
 from issue_graphrag.live.inbox import DeliveryInbox
+from issue_graphrag.live.operations import install_shutdown_handlers
 from issue_graphrag.live.processor import DeliveryProcessor, ProcessingResult, run_worker_loop
 from issue_graphrag.live.repositories import RepoRegistry, repo_paths
 from issue_graphrag.live.runtime import configured_extractor, validate_openrouter_operations
@@ -188,15 +190,19 @@ def main() -> None:
         raise SystemExit(0 if result.status == "succeeded" else 1)
 
     print(f"Processing {inbox_path} for {repo}; state: {state_path}")
+    stop_event = threading.Event()
+    restore_handlers = install_shutdown_handlers(stop_event)
     try:
         run_worker_loop(
             processor,
             poll_seconds=args.poll_seconds,
             on_result=_print_result,
             on_error=_print_worker_error,
+            should_stop=stop_event.is_set,
+            wait=stop_event.wait,
         )
-    except KeyboardInterrupt:
-        pass
+    finally:
+        restore_handlers()
 
 
 if __name__ == "__main__":

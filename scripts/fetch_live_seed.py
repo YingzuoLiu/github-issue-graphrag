@@ -10,7 +10,10 @@ import argparse
 import json
 from pathlib import Path
 
+import requests
+
 from issue_graphrag.config import load_settings
+from issue_graphrag.http_boundary import CountingSession
 from issue_graphrag.ingest.github_loader import build_live_seed
 from issue_graphrag.live.repositories import RepoRegistry, read_freshness, write_freshness
 from issue_graphrag.live.timeutil import now_utc, to_iso
@@ -43,6 +46,7 @@ def main() -> None:
     settings = load_settings()
     repo_storage = RepoRegistry(settings.repo_data_dir, settings.github_repos).register(args.repo)
     fetched_at = to_iso(now_utc())
+    github = CountingSession(requests.Session())
     snapshot = build_live_seed(
         repo_storage.repo,
         token=settings.github_token,
@@ -55,6 +59,7 @@ def main() -> None:
         comment_max_pages=args.comment_max_pages,
         file_limit_per_pull=args.file_limit_per_pull,
         file_max_pages=args.file_max_pages,
+        session=github,
     )
     snapshot["fetched_at"] = fetched_at
     snapshot["backfill"] = {
@@ -86,6 +91,7 @@ def main() -> None:
     comments = sum(len(item["comments"]) for item in snapshot["items"])
     print(f"Wrote {output}")
     print(f"  {issues} issues, {pulls} pull requests, {comments} comments")
+    print(f"  GitHub boundary: {github.read_count} reads, {github.write_count} writes")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from issue_graphrag.config import load_settings
+from issue_graphrag.live.operations import validate_public_viewer
 from issue_graphrag.live.runtime import configured_llm, validate_openrouter_operations
 
 
@@ -52,3 +53,56 @@ def test_live_operations_reject_free_or_auto_router_models(monkeypatch):
 
     with pytest.raises(ValueError, match="forbids free/auto"):
         validate_openrouter_operations(load_settings())
+
+
+def test_secrets_can_come_from_files_but_never_both_sources(monkeypatch, tmp_path):
+    secret_file = tmp_path / "github-token"
+    secret_file.write_text("token-from-file\n", encoding="utf-8")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN_FILE", str(secret_file))
+
+    assert load_settings().github_token == "token-from-file"
+
+    monkeypatch.setenv("GITHUB_TOKEN", "token-from-env")
+    with pytest.raises(ValueError, match="set only one"):
+        load_settings()
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN_FILE", str(tmp_path / "missing-token"))
+    with pytest.raises(ValueError, match="readable regular file"):
+        load_settings()
+
+
+def test_public_viewer_rejects_credentials_and_has_separate_analytics(monkeypatch, tmp_path):
+    analytics = tmp_path / "analytics" / "radar.sqlite"
+    monkeypatch.setenv("PUBLIC_RADAR_ONLY", "true")
+    monkeypatch.setenv("RADAR_ANALYTICS_PATH", str(analytics))
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN_FILE", raising=False)
+    settings = load_settings()
+
+    validate_public_viewer(settings)
+    assert settings.public_radar_only is True
+    assert settings.radar_analytics_path == analytics
+
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-reach-viewer")
+    with pytest.raises(ValueError, match="public Viewer must not receive credentials"):
+        validate_public_viewer(load_settings())
+
+
+def test_public_viewer_rejects_analytics_inside_repository_data(monkeypatch, tmp_path):
+    monkeypatch.setenv("PUBLIC_RADAR_ONLY", "1")
+    monkeypatch.setenv("REPO_DATA_DIR", str(tmp_path / "repos"))
+    monkeypatch.setenv(
+        "RADAR_ANALYTICS_PATH",
+        str(tmp_path / "repos" / "radar_analytics.sqlite"),
+    )
+
+    with pytest.raises(ValueError, match="analytics must be outside"):
+        validate_public_viewer(load_settings())
+
+
+def test_invalid_boolean_configuration_is_rejected(monkeypatch):
+    monkeypatch.setenv("PUBLIC_RADAR_ONLY", "sometimes")
+    with pytest.raises(ValueError, match="must be true or false"):
+        load_settings()

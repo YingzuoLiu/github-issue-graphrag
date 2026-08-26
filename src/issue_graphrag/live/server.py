@@ -8,8 +8,11 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Mapping
 
+from issue_graphrag.live.backup import pending_restore_count
 from issue_graphrag.live.inbox import DeliveryConflict, DeliveryInbox
+from issue_graphrag.live.operations import probe_writable_directory
 from issue_graphrag.live.records import supports_event
+from issue_graphrag.live.repositories import repo_directory_name
 from issue_graphrag.live.timeutil import now_utc, to_iso
 from issue_graphrag.live.webhook import (
     WebhookAuthenticationError,
@@ -48,6 +51,20 @@ class WebhookReceiver:
         self.repo = "/".join(parts)
         self.inbox = inbox
         self.max_body_bytes = max_body_bytes
+
+    def readiness(self) -> WebhookResponse:
+        try:
+            self.inbox.count()
+            probe_writable_directory(self.inbox.path.parent)
+            lane = self.inbox.path.parent
+            if (
+                lane.name == repo_directory_name(self.repo)
+                and pending_restore_count(lane.parent, self.repo)
+            ):
+                raise OSError("repository restore is incomplete")
+        except Exception:
+            return WebhookResponse(503, {"status": "unavailable"})
+        return WebhookResponse(200, {"status": "ready"})
 
     def receive(
         self,
@@ -130,15 +147,15 @@ def create_http_server(
             self.wfile.write(raw)
 
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+            if self.path in {"/healthz", "/livez"}:
+                self._send(WebhookResponse(200, {"status": "ok"}))
+                return
+            if self.path == "/readyz":
+                self._send(receiver.readiness())
+                return
             if self.path != "/healthz":
                 self._send(WebhookResponse(404, {"status": "not found"}))
                 return
-            try:
-                receiver.inbox.count()
-            except Exception:
-                self._send(WebhookResponse(503, {"status": "unavailable"}))
-                return
-            self._send(WebhookResponse(200, {"status": "ok"}))
 
         def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
             if self.path != "/webhooks/github":

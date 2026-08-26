@@ -26,10 +26,12 @@ from issue_graphrag.live.synchronizer import (
     RepositoryObservation,
     ScheduledSynchronizer,
     SyncConfig,
+    SyncResult,
     SyncResource,
     plan_reconciliation,
     read_sync_state,
     reconciliation_delivery_id,
+    run_synchronizer_loop,
     write_sync_state,
 )
 
@@ -868,6 +870,41 @@ def test_incomplete_file_window_leaves_the_file_set_to_worker_hydration():
     observed = client.observe(REPO, RepoSyncState(repo=REPO), config, NOW)
 
     assert "files" not in observed.resources["pull_request:7"].attachments
+
+
+def test_synchronizer_loop_cooperatively_stops_during_schedule_wait():
+    class OnePoll:
+        def __init__(self):
+            self.calls = 0
+
+        def sync_once(self):
+            self.calls += 1
+            return SyncResult(
+                repo=REPO,
+                status="succeeded",
+                attempted_at=NOW,
+                next_sync_at=LATER,
+            )
+
+    synchronizer = OnePoll()
+    stopped = False
+    results = []
+
+    def wait(delay):  # noqa: ANN001
+        nonlocal stopped
+        assert delay == 900
+        stopped = True
+
+    run_synchronizer_loop(
+        synchronizer,  # type: ignore[arg-type]
+        results.append,
+        clock=lambda: datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc),
+        should_stop=lambda: stopped,
+        wait=wait,
+    )
+
+    assert synchronizer.calls == 1
+    assert len(results) == 1
 
 
 @pytest.mark.parametrize(
