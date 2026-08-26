@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 import requests
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from issue_graphrag.http_boundary import CountingSession
 from issue_graphrag.ingest.github_loader import parse_repo
@@ -29,17 +29,27 @@ from issue_graphrag.live.repositories import (
     canonical_repo,
     read_freshness,
     write_freshness,
-    write_json_atomic,
+)
+from issue_graphrag.live.sync_checkpoint import (
+    DEFAULT_CLOSED_RETENTION_SECONDS,
+    DEFAULT_MAX_CHECKPOINT_BYTES,
+    DEFAULT_MAX_CHECKPOINT_RESOURCES,
+    DEFAULT_OPEN_RETENTION_SECONDS,
+    CachedResponse,
+    CheckpointPolicy,
+    ParentKind,
+    RepoSyncState,
+    SyncResource,
+    compact_sync_resources,
+    read_sync_state,
+    validate_checkpoint_limits,
+    write_sync_state,
 )
 from issue_graphrag.live.timeutil import max_iso, now_utc, parse_iso, to_iso
 
-SYNC_STATE_VERSION = 1
 DEFAULT_SYNC_INTERVAL_SECONDS = 15 * 60
 DEFAULT_FAILURE_RETRY_SECONDS = 60
 DEFAULT_API_VERSION = "2026-03-10"
-
-ResourceKind = Literal["issue", "pull_request", "comment", "dependency"]
-ParentKind = Literal["issue", "pull_request"]
 
 
 def _canonical_json(value: object) -> str:
@@ -48,103 +58,6 @@ def _canonical_json(value: object) -> str:
 
 def _sha256(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
-
-
-class CachedResponse(BaseModel):
-    """One reusable representation plus GitHub's validators for its exact request."""
-
-    etag: str | None = None
-    last_modified: str | None = None
-    payload: Any
-
-
-class SyncResource(BaseModel):
-    """Canonical current-state resource retained for the next deterministic diff."""
-
-    kind: ResourceKind
-    identity: str
-    source_updated_at: str
-    payload: dict[str, Any] = Field(default_factory=dict)
-    attachments: dict[str, Any] = Field(default_factory=dict)
-    parent_kind: ParentKind | None = None
-    parent_number: int | None = None
-    fingerprint: str
-
-    @classmethod
-    def observed(
-        cls,
-        *,
-        kind: ResourceKind,
-        identity: str,
-        source_updated_at: str,
-        payload: Mapping[str, Any],
-        attachments: Mapping[str, Any] | None = None,
-        parent_kind: ParentKind | None = None,
-        parent_number: int | None = None,
-    ) -> "SyncResource":
-        payload_dict = dict(payload)
-        attachment_dict = dict(attachments or {})
-        content = {
-            "payload": payload_dict,
-            "attachments": attachment_dict,
-            "parent_kind": parent_kind,
-            "parent_number": parent_number,
-        }
-        return cls(
-            kind=kind,
-            identity=identity,
-            source_updated_at=to_iso(source_updated_at),
-            payload=payload_dict,
-            attachments=attachment_dict,
-            parent_kind=parent_kind,
-            parent_number=parent_number,
-            fingerprint=_sha256(content),
-        )
-
-    def validate_fingerprint(self) -> None:
-        expected = _sha256(
-            {
-                "payload": self.payload,
-                "attachments": self.attachments,
-                "parent_kind": self.parent_kind,
-                "parent_number": self.parent_number,
-            }
-        )
-        if expected != self.fingerprint:
-            raise ValueError(f"sync resource fingerprint mismatch: {self.identity}")
-
-
-class RepoSyncState(BaseModel):
-    """Last-good observation and conditional HTTP cache for one repository lane."""
-
-    version: int = SYNC_STATE_VERSION
-    repo: str
-    last_observed_at: str | None = None
-    request_cache: dict[str, CachedResponse] = Field(default_factory=dict)
-    resources: dict[str, SyncResource] = Field(default_factory=dict)
-
-
-def read_sync_state(path: Path, repo: str) -> RepoSyncState:
-    normalized = canonical_repo(repo)
-    if not path.exists():
-        return RepoSyncState(repo=normalized)
-    with path.open("r", encoding="utf-8") as handle:
-        state = RepoSyncState.model_validate(json.load(handle))
-    if state.version != SYNC_STATE_VERSION:
-        raise ValueError(f"unsupported sync state version: {state.version}")
-    if canonical_repo(state.repo) != normalized:
-        raise ValueError(f"sync state belongs to {state.repo!r}, not {normalized!r}")
-    state.repo = normalized
-    for key, resource in state.resources.items():
-        if key != resource.identity:
-            raise ValueError(f"sync resource key does not match identity: {key!r}")
-        resource.validate_fingerprint()
-    return state
-
-
-def write_sync_state(path: Path, state: RepoSyncState) -> None:
-    state.repo = canonical_repo(state.repo)
-    write_json_atomic(path, state.model_dump(mode="json"))
 
 
 @dataclass(frozen=True)
@@ -161,6 +74,10 @@ class SyncConfig:
     dependency_max_pages: int = 10
     http_attempts: int = 3
     http_backoff_seconds: float = 1.0
+    checkpoint_open_retention_seconds: int = DEFAULT_OPEN_RETENTION_SECONDS
+    checkpoint_closed_retention_seconds: int = DEFAULT_CLOSED_RETENTION_SECONDS
+    checkpoint_max_resources: int = DEFAULT_MAX_CHECKPOINT_RESOURCES
+    checkpoint_max_bytes: int = DEFAULT_MAX_CHECKPOINT_BYTES
 
     def __post_init__(self) -> None:
         positive = {
@@ -172,6 +89,8 @@ class SyncConfig:
             "file_max_pages": self.file_max_pages,
             "dependency_max_pages": self.dependency_max_pages,
             "http_attempts": self.http_attempts,
+            "checkpoint_max_resources": self.checkpoint_max_resources,
+            "checkpoint_max_bytes": self.checkpoint_max_bytes,
         }
         for name, positive_value in positive.items():
             if positive_value <= 0:
@@ -181,10 +100,21 @@ class SyncConfig:
             "file_limit_per_pull": self.file_limit_per_pull,
             "dependency_limit_per_issue": self.dependency_limit_per_issue,
             "http_backoff_seconds": self.http_backoff_seconds,
+            "checkpoint_open_retention_seconds": self.checkpoint_open_retention_seconds,
+            "checkpoint_closed_retention_seconds": self.checkpoint_closed_retention_seconds,
         }
         for name, non_negative_value in non_negative.items():
             if non_negative_value < 0:
                 raise ValueError(f"{name} must be non-negative")
+
+    @property
+    def checkpoint_policy(self) -> CheckpointPolicy:
+        return CheckpointPolicy(
+            open_retention_seconds=self.checkpoint_open_retention_seconds,
+            closed_retention_seconds=self.checkpoint_closed_retention_seconds,
+            max_resources=self.checkpoint_max_resources,
+            max_bytes=self.checkpoint_max_bytes,
+        )
 
 
 class RateLimitedError(RuntimeError):
@@ -516,6 +446,7 @@ class ConditionalGitHubClient:
                 kind=kind,
                 identity=item_key,
                 source_updated_at=source_updated_at,
+                last_observed_at=observed_at,
                 payload=item_payload,
                 attachments={"files": files} if files is not None else {},
                 parent_kind=kind,
@@ -528,17 +459,20 @@ class ConditionalGitHubClient:
                     kind="dependency",
                     identity=dependency_key,
                     source_updated_at=source_updated_at,
+                    last_observed_at=observed_at,
                     payload={"count": dependency_count},
                     attachments={"blocking_dependency_count": dependency_count},
                     parent_kind=kind,
                     parent_number=number,
                 )
 
+            comment_ids: list[str] = []
             for raw_comment in comments.rows:
                 if raw_comment.get("id") is None:
                     raise ValueError("GitHub issue comment is missing id")
                 comment = _comment_payload(raw_comment)
                 comment_id = str(comment["id"])
+                comment_ids.append(comment_id)
                 comment_key = f"comment:{comment_id}"
                 resources[comment_key] = SyncResource.observed(
                     kind="comment",
@@ -546,7 +480,25 @@ class ConditionalGitHubClient:
                     source_updated_at=(
                         comment.get("updated_at") or comment.get("created_at") or source_updated_at
                     ),
+                    last_observed_at=observed_at,
                     payload=comment,
+                    parent_kind=kind,
+                    parent_number=number,
+                )
+
+            if comments.complete:
+                manifest_key = f"comment_manifest:{kind}:{number}"
+                resources[manifest_key] = SyncResource.observed(
+                    kind="comment_manifest",
+                    identity=manifest_key,
+                    # This is an absence observation, so the poll clock is its
+                    # source-side effective time. The manifest fingerprint is
+                    # only the stable complete id set; unchanged polls remain
+                    # no-ops even though their observation clock advances.
+                    source_updated_at=observed_at,
+                    last_observed_at=observed_at,
+                    payload={},
+                    attachments={"comment_ids": sorted(comment_ids)},
                     parent_kind=kind,
                     parent_number=number,
                 )
@@ -648,16 +600,32 @@ def reconciliation_delivery_id(
     return f"reconciliation-{digest}"
 
 
+def _comment_manifest_delivery_id(repo: str, resource: SyncResource) -> str:
+    """Deduplicate a complete comment set independently of the poll clock."""
+    digest = _sha256(
+        {
+            "repo": canonical_repo(repo),
+            "resource_identity": resource.identity,
+            "content_fingerprint": resource.fingerprint,
+        }
+    )
+    return f"reconciliation-{digest}"
+
+
 def _event_for_resource(
     repo: str,
     resource: SyncResource,
     previous: SyncResource | None,
 ) -> RepoEvent:
-    delivery_id = reconciliation_delivery_id(
-        repo,
-        resource.identity,
-        resource.source_updated_at,
-        resource.fingerprint,
+    delivery_id = (
+        _comment_manifest_delivery_id(repo, resource)
+        if resource.kind == "comment_manifest"
+        else reconciliation_delivery_id(
+            repo,
+            resource.identity,
+            resource.source_updated_at,
+            resource.fingerprint,
+        )
     )
     repository = {"full_name": repo}
     if resource.kind == "issue":
@@ -685,6 +653,16 @@ def _event_for_resource(
             "comment": resource.payload,
         }
         event_type = "issue_comment"
+    elif resource.kind == "comment_manifest":
+        parent = {"number": resource.parent_number}
+        if resource.parent_kind == "pull_request":
+            parent["pull_request"] = {}
+        payload = {
+            "action": "reconciled",
+            "repository": repository,
+            "issue": parent,
+        }
+        event_type = "issue_comments"
     elif resource.kind == "dependency":
         payload = {
             "action": "reconciled",
@@ -695,7 +673,7 @@ def _event_for_resource(
             },
         }
         event_type = "issue_dependencies"
-    else:  # pragma: no cover - ResourceKind and Pydantic keep this unreachable.
+    else:  # pragma: no cover - Pydantic keeps this unreachable.
         raise ValueError(f"unsupported sync resource kind: {resource.kind}")
 
     return RepoEvent(
@@ -771,6 +749,13 @@ def plan_reconciliation(
     current_comment_keys = {
         key for key, resource in observation.resources.items() if resource.kind == "comment"
     }
+    current_manifests = {
+        f"{resource.parent_kind}:{resource.parent_number}": resource
+        for resource in observation.resources.values()
+        if resource.kind == "comment_manifest"
+        and resource.parent_kind is not None
+        and resource.parent_number is not None
+    }
     for key, old in sorted(previous.resources.items()):
         parent_key = (
             f"{old.parent_kind}:{old.parent_number}"
@@ -782,13 +767,17 @@ def plan_reconciliation(
             and parent_key in observation.complete_comment_parents
             and key not in current_comment_keys
         ):
-            current_parent = observation.resources.get(parent_key or "")
-            source_updated_at = (
-                current_parent.source_updated_at
-                if current_parent is not None
-                else old.source_updated_at
-            )
-            events.append(_deleted_comment_event(normalized, old, source_updated_at))
+            manifest = current_manifests.get(parent_key or "")
+            if manifest is None:
+                # Compatibility for a synthetic/legacy observer that proves a
+                # complete window but does not yet publish a manifest.
+                current_parent = observation.resources.get(parent_key or "")
+                source_updated_at = (
+                    current_parent.source_updated_at
+                    if current_parent is not None
+                    else old.source_updated_at
+                )
+                events.append(_deleted_comment_event(normalized, old, source_updated_at))
             resources.pop(key, None)
 
     for key, current in sorted(observation.resources.items()):
@@ -803,7 +792,16 @@ def plan_reconciliation(
             events.append(_event_for_resource(normalized, current, prior))
         resources[key] = current.model_copy(deep=True)
 
-    events.sort(key=lambda event: (event.received_at, event.delivery_id))
+    # Keep plan output stable and place the aggregate observation last for
+    # human inspection. Correctness does not depend on inbox order: a manifest
+    # never removes an id it contains, and source clocks protect newer edits.
+    events.sort(
+        key=lambda event: (
+            event.received_at,
+            event.event_type == "issue_comments",
+            event.delivery_id,
+        )
+    )
     return ReconciliationPlan(events=tuple(events), resources=resources)
 
 
@@ -820,6 +818,10 @@ class SyncResult(BaseModel):
     read_requests: int = 0
     not_modified_requests: int = 0
     write_requests: int = 0
+    checkpoint_resources: int = 0
+    checkpoint_bytes: int = 0
+    compacted_resources: int = 0
+    compacted_families: int = 0
     error: str | None = None
 
 
@@ -856,6 +858,10 @@ class ScheduledSynchronizer:
     def sync_once(self, now: str | None = None) -> SyncResult:
         attempted_at = to_iso(now) if now else to_iso(now_utc())
         observation: RepositoryObservation | None = None
+        checkpoint_resources = 0
+        checkpoint_bytes = 0
+        compacted_resources = 0
+        compacted_families = 0
         try:
             previous = read_sync_state(self.sync_state_path, self.repo)
             observation = self.observer.observe(
@@ -869,6 +875,36 @@ class ScheduledSynchronizer:
                     f"scheduled synchronizer attempted a GitHub write: {observation.write_requests}"
                 )
             plan = plan_reconciliation(self.repo, previous, observation)
+            for key in observation.resources:
+                plan.resources[key].last_observed_at = attempted_at
+            compaction = compact_sync_resources(
+                plan.resources,
+                observed_identities=frozenset(observation.resources),
+                compacted_at=attempted_at,
+                policy=self.config.checkpoint_policy,
+            )
+            compacted_resources = compaction.compacted_resources
+            compacted_families = compaction.compacted_families
+            next_state = RepoSyncState(
+                repo=self.repo,
+                last_observed_at=attempted_at,
+                last_compacted_at=(
+                    attempted_at if compacted_families else previous.last_compacted_at
+                ),
+                compacted_resources_total=(
+                    previous.compacted_resources_total + compacted_resources
+                ),
+                compacted_families_total=(previous.compacted_families_total + compacted_families),
+                request_cache=observation.request_cache,
+                resources=compaction.resources,
+            )
+            checkpoint_resources = len(next_state.resources)
+            # Check before enqueue so an operator ceiling cannot create a new
+            # batch that the synchronizer already knows it cannot checkpoint.
+            checkpoint_bytes = validate_checkpoint_limits(
+                next_state,
+                self.config.checkpoint_policy,
+            )
             outcomes = [self.inbox.enqueue(event, attempted_at) for event in plan.events]
             effective_interval = max(
                 self.config.interval_seconds,
@@ -877,12 +913,8 @@ class ScheduledSynchronizer:
             next_sync_at = to_iso(parse_iso(attempted_at) + timedelta(seconds=effective_interval))
             write_sync_state(
                 self.sync_state_path,
-                RepoSyncState(
-                    repo=self.repo,
-                    last_observed_at=attempted_at,
-                    request_cache=observation.request_cache,
-                    resources=plan.resources,
-                ),
+                next_state,
+                self.config.checkpoint_policy,
             )
             freshness = read_freshness(self.freshness_path, self.repo)
             freshness.last_source_attempt_at = attempted_at
@@ -909,6 +941,10 @@ class ScheduledSynchronizer:
                 read_requests=observation.read_requests,
                 not_modified_requests=observation.not_modified_requests,
                 write_requests=observation.write_requests,
+                checkpoint_resources=checkpoint_resources,
+                checkpoint_bytes=checkpoint_bytes,
+                compacted_resources=compacted_resources,
+                compacted_families=compacted_families,
             )
         except RateLimitedError as exc:
             error = f"{type(exc).__name__}: {exc}"
@@ -935,6 +971,10 @@ class ScheduledSynchronizer:
                 read_requests=(observation.read_requests if observation else 0),
                 not_modified_requests=(observation.not_modified_requests if observation else 0),
                 write_requests=(observation.write_requests if observation else 0),
+                checkpoint_resources=checkpoint_resources,
+                checkpoint_bytes=checkpoint_bytes,
+                compacted_resources=compacted_resources,
+                compacted_families=compacted_families,
                 error=error,
             )
 

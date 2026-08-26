@@ -115,6 +115,14 @@ last-good snapshot remains available, freshness becomes `stale`, and a retry use
 delivery ids. This converges current issue, pull request, comment, changed-file and dependency
 state, but deliberately does not reconstruct GitHub's missed webhook chronology.
 
+Checkpoint v2 bounds retained resource families by separate open/closed inactivity periods and
+enforces resource and byte ceilings before enqueue. A complete comment page emits a stable
+`comment_manifest`, so a family may later be compacted without losing the ability to remove a
+comment when that parent returns to the bounded window. An incomplete page emits no manifest and
+never proves absence. Corrupt checkpoints are not deleted or replaced by the poll loop; use the
+status, dry-run, confirmed recovery and rollback procedure in
+[`sync-checkpoint-operations.md`](sync-checkpoint-operations.md).
+
 ## Freshness semantics
 
 Each lane's `freshness.json` reports separate source and semantic clocks:

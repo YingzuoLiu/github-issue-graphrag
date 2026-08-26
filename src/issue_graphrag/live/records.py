@@ -26,6 +26,7 @@ SUPPORTED_EVENT_ACTIONS: dict[str, frozenset[str] | None] = {
     "issues": None,
     "pull_request": None,
     "issue_comment": frozenset({"created", "edited", "deleted"}),
+    "issue_comments": frozenset({"reconciled"}),
     "issue_dependencies": frozenset(
         {
             "blocked_by_added",
@@ -344,6 +345,35 @@ def apply_event_to_records(state: LiveState, event: RepoEvent) -> list[str]:
             remove_comment(state, document_id, comment, deleted_at, delivery)
         else:
             upsert_comment(state, document_id, comment, delivery)
+        return [document_id]
+
+    if event.event_type == "issue_comments":
+        if event.source != "reconciliation":
+            raise UnsupportedEvent("issue_comments is an internal reconciliation event")
+        parent = payload.get("issue") or payload.get("pull_request") or {}
+        comment_ids = event.attachments.get("comment_ids")
+        if not parent or not isinstance(comment_ids, list):
+            raise UnsupportedEvent(
+                "issue_comments event without a parent or complete comment_ids attachment"
+            )
+        number = int(parent["number"])
+        kind = resolve_kind(state, repo, number, parent)
+        document_id, _ = upsert_item(state, repo, parent, kind, delivery)
+        observed_comment_ids = {str(comment_id) for comment_id in comment_ids}
+        for comment_id in sorted(
+            set(state.items[document_id].comments) - observed_comment_ids
+        ):
+            # GitHub has no deletion timestamp for an absent REST resource. The
+            # complete poll time is therefore the deterministic source clock;
+            # remove_comment still protects a newer webhook edit from a stale
+            # manifest processed later.
+            remove_comment(
+                state,
+                document_id,
+                {"id": comment_id},
+                event.received_at,
+                delivery,
+            )
         return [document_id]
 
     if event.event_type == "issue_dependencies":

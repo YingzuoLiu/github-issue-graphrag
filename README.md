@@ -754,7 +754,7 @@ and [redelivery documentation](https://docs.github.com/en/webhooks/testing-and-t
 
 The deterministic M5 synchronizer closes the current-state gap left by a missed webhook without
 pretending to recover that webhook's chronology. It polls only the configured repository, stores
-conditional-request validators and a last-good checkpoint for each bounded observation in the
+conditional-request validators and a versioned, bounded checkpoint for each observation in the
 repository lane, and
 turns each changed issue, pull request, comment or dependency observation into one stable
 `source=reconciliation` delivery. Those deliveries enter the same SQLite inbox and single-writer
@@ -770,6 +770,10 @@ python scripts/sync_repositories.py getzep/graphiti --once --expect-noop
 # run the configured 15-minute loop and inspect visible freshness/checkpoint state
 python scripts/sync_repositories.py getzep/graphiti --loop
 python scripts/sync_repositories.py getzep/graphiti --status
+
+# inspect first; neither command below changes files
+python scripts/sync_repositories.py getzep/graphiti --recover-checkpoint --dry-run
+python scripts/sync_repositories.py getzep/graphiti --rebaseline-checkpoint --dry-run
 ```
 
 Set `GITHUB_SYNC_INTERVAL_SECONDS` to change the 900-second default. GitHub's
@@ -779,8 +783,9 @@ failures receive bounded retries. A bounded page the poll could not finish readi
 unobserved, not recorded as a smaller number, so the last complete observation stands. Any
 incomplete fetch or enqueue
 leaves the previous checkpoint intact and marks source freshness stale. See
-[`docs/repository-isolation.md`](docs/repository-isolation.md) for the checkpoint, bounds and
-failure semantics.
+[`docs/repository-isolation.md`](docs/repository-isolation.md) for lane isolation and
+[`docs/sync-checkpoint-operations.md`](docs/sync-checkpoint-operations.md) for checkpoint
+retention, hard limits, corruption recovery, confirmation and rollback.
 
 ### What v0.3 deliberately does not do
 
@@ -1045,6 +1050,7 @@ src/issue_graphrag/
     inbox.py             # durable SQLite leases, retry and dead letters
     github_api.py        # paginated pull-request file hydration
     synchronizer.py      # conditional snapshot diff -> reconciliation deliveries
+    sync_checkpoint.py   # bounded v2 checkpoint, last-good, quarantine and recovery
     processor.py         # inbox -> atomic state + append-once audit log
     repositories.py      # per-repository paths, registry and freshness metadata
     runtime.py           # shared deterministic/rules/LLM extractor setup
