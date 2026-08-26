@@ -1,7 +1,7 @@
 x-app: &app
   build:
     context: .
-  image: github-issue-graphrag:0.4.0-dev
+  image: ${APP_IMAGE:-github-issue-graphrag:0.4.0-dev}
   init: true
   read_only: true
   restart: unless-stopped
@@ -156,6 +156,8 @@ services:
 
   proxy:
     image: caddy:2.10.2-alpine
+    profiles:
+      - local
     init: true
     read_only: true
     restart: unless-stopped

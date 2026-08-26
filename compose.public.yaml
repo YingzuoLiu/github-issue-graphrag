@@ -1,0 +1,58 @@
+services:
+  public-proxy:
+    image: traefik:v3.6.14
+    profiles:
+      - public
+    init: true
+    read_only: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    command:
+      - --api.dashboard=false
+      - --providers.file.filename=/etc/traefik/dynamic.toml
+      - --providers.file.watch=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.health.address=:8082
+      - --ping=true
+      - --ping.entrypoint=health
+      - --log.level=INFO
+      - --log.format=json
+      - --accesslog=true
+      - --accesslog.format=json
+      - --accesslog.fields.headers.defaultmode=drop
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?Set ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/var/lib/traefik/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+      - target: 443
+        published: 443
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ${TRAEFIK_DYNAMIC_CONFIG_HOST:?Set TRAEFIK_DYNAMIC_CONFIG_HOST}
+        target: /etc/traefik/dynamic.toml
+        read_only: true
+      - type: bind
+        source: ${TRAEFIK_ACME_DATA_HOST:?Set TRAEFIK_ACME_DATA_HOST}
+        target: /var/lib/traefik
+    tmpfs:
+      - /tmp
+    depends_on:
+      receiver:
+        condition: service_healthy
+      viewer:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - traefik
+        - healthcheck
+        - --ping
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s

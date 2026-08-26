@@ -97,10 +97,28 @@ wait_service_healthy() {
   return 1
 }
 
-compose --profile live --profile ops config --format json >"${smoke_root}/compose.json"
+compose --profile local --profile live --profile ops config --format json >"${smoke_root}/compose.json"
 "${project_root}/.venv/bin/python" "${project_root}/scripts/check_compose_contract.py" \
   "${smoke_root}/compose.json" 2>/dev/null \
   || python "${project_root}/scripts/check_compose_contract.py" "${smoke_root}/compose.json"
+
+python_bin="${project_root}/.venv/bin/python"
+if [[ ! -x "${python_bin}" ]]; then
+  python_bin="python"
+fi
+"${python_bin}" "${project_root}/scripts/render_preapply_plan.py" \
+  "${project_root}/deploy/aws-lightsail/preapply.example.json" \
+  --output-dir "${smoke_root}/preapply"
+docker compose \
+  --project-directory "${project_root}" \
+  --project-name "${compose_project}" \
+  --env-file "${smoke_root}/preapply/compose-public.env" \
+  -f "${project_root}/compose.yaml" \
+  -f "${project_root}/compose.public.yaml" \
+  --profile local --profile live --profile ops --profile public \
+  config --format json >"${smoke_root}/compose-public.json"
+"${python_bin}" "${project_root}/scripts/check_compose_contract.py" \
+  --public "${smoke_root}/compose-public.json"
 
 compose build receiver
 compose up --detach receiver worker viewer proxy

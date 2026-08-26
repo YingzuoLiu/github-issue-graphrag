@@ -44,6 +44,8 @@ def validate_compose(payload: dict[str, Any]) -> None:
     published = [name for name, service in services.items() if service.get("ports")]
     if published != ["proxy"]:
         raise ValueError(f"only proxy may publish ports, observed {published}")
+    if set(services["proxy"].get("profiles") or []) != {"local"}:
+        raise ValueError("provider-neutral proxy must be restricted to the local profile")
     for name in READ_ONLY_SERVICES:
         if services[name].get("read_only") is not True:
             raise ValueError(f"{name} root filesystem must be read-only")
@@ -77,11 +79,59 @@ def validate_compose(payload: dict[str, Any]) -> None:
             raise ValueError(f"{name} secret boundary mismatch: {sorted(actual)}")
 
 
+def validate_public_compose(payload: dict[str, Any]) -> None:
+    """Validate the merged provider-neutral and public edge configuration."""
+
+    services = payload.get("services") or {}
+    public_proxy = services.get("public-proxy")
+    if not isinstance(public_proxy, dict):
+        raise ValueError("missing public-proxy service")
+
+    local_payload = {**payload, "services": {k: v for k, v in services.items() if k != "public-proxy"}}
+    validate_compose(local_payload)
+
+    if public_proxy.get("image") != "traefik:v3.6.14":
+        raise ValueError("public-proxy image must pin traefik:v3.6.14")
+    if set(public_proxy.get("profiles") or []) != {"public"}:
+        raise ValueError("public-proxy must be restricted to the public profile")
+    if public_proxy.get("read_only") is not True:
+        raise ValueError("public-proxy root filesystem must be read-only")
+    if _secret_names(public_proxy):
+        raise ValueError("public-proxy must receive zero Compose secrets")
+    published = sorted(int(row["published"]) for row in public_proxy.get("ports") or [])
+    if published != [80, 443]:
+        raise ValueError(f"public-proxy must publish only 80/443, observed {published}")
+    mounts = public_proxy.get("volumes") or []
+    if any("docker.sock" in str(row.get("source", "")) for row in mounts if isinstance(row, dict)):
+        raise ValueError("public-proxy must not receive the Docker socket")
+    dynamic = _mount(public_proxy, "/etc/traefik/dynamic.toml")
+    acme = _mount(public_proxy, "/var/lib/traefik")
+    if dynamic is None or not dynamic.get("read_only"):
+        raise ValueError("public-proxy dynamic configuration must be read-only")
+    if acme is None or acme.get("read_only"):
+        raise ValueError("public-proxy ACME storage must be writable")
+
+    command = {str(row) for row in public_proxy.get("command") or []}
+    required = {
+        "--providers.file.filename=/etc/traefik/dynamic.toml",
+        "--providers.file.watch=false",
+        "--accesslog.fields.headers.defaultmode=drop",
+        "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web",
+    }
+    if not required <= command:
+        raise ValueError("public-proxy static security configuration is incomplete")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("rendered_json", type=Path)
+    parser.add_argument("--public", action="store_true")
     args = parser.parse_args()
-    validate_compose(json.loads(args.rendered_json.read_text(encoding="utf-8")))
+    payload = json.loads(args.rendered_json.read_text(encoding="utf-8"))
+    if args.public:
+        validate_public_compose(payload)
+    else:
+        validate_compose(payload)
     print("compose contract satisfied")
 
 

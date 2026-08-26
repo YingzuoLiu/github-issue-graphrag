@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "example_only": true,
+  "provider": {
+    "name": "aws_lightsail",
+    "account_id": "123456789012",
+    "region": "ap-southeast-1",
+    "availability_zone": "ap-southeast-1a"
+  },
+  "resources": {
+    "instance_name": "issue-graphrag-prod",
+    "bundle_id": "small_3_0",
+    "blueprint_id": "ubuntu_24_04",
+    "static_ip_name": "issue-graphrag-prod-ip",
+    "disk_name": "issue-graphrag-prod-data",
+    "disk_size_gib": 20
+  },
+  "application": {
+    "github_repo": "owner/name",
+    "app_image": "github-issue-graphrag:example-only",
+    "public_product_name": "Contribution Radar",
+    "public_ask": false,
+    "openrouter_deployed": false,
+    "durable_root": "/srv/issue-graphrag",
+    "secret_root": "/etc/issue-graphrag/secrets"
+  },
+  "network": {
+    "hostname": "radar.example.com",
+    "acme_email": "operator@example.com",
+    "admin_cidrs": [
+      "192.0.2.10/32"
+    ],
+    "public_tcp_ports": [
+      80,
+      443
+    ]
+  },
+  "edge": {
+    "image": "traefik:v3.6.14",
+    "webhook": {
+      "max_request_body_bytes": 26214400,
+      "max_in_flight": 8,
+      "rate_average": 1,
+      "rate_period": "1s",
+      "rate_burst": 20
+    },
+    "viewer": {
+      "max_request_body_bytes": 1048576,
+      "max_in_flight": 32,
+      "rate_average": 2,
+      "rate_period": "1s",
+      "rate_burst": 20
+    }
+  },
+  "backup": {
+    "automatic_disk_snapshot": true,
+    "snapshot_time_utc": "18:00",
+    "automatic_snapshot_retention_days": 7,
+    "final_manual_snapshot_retention_days": 30
+  },
+  "cost": {
+    "budget_name": "issue-graphrag-prod-monthly",
+    "budget_alert_email": "operator@example.com",
+    "instance_monthly_usd": 12.0,
+    "disk_monthly_usd": 2.0,
+    "expected_snapshot_monthly_usd": 1.0,
+    "seven_full_snapshots_monthly_usd": 7.0,
+    "egress_overage_usd_per_gib": 0.12,
+    "budget_alert_usd": 20.0,
+    "provider_hard_ceiling": false
+  },
+  "approvals": {
+    "account": false,
+    "region": false,
+    "hostname": false,
+    "budget_alert_and_no_hard_ceiling": false,
+    "teardown_retention": false
+  }
+}
