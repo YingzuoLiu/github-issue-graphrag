@@ -600,12 +600,25 @@ def reconciliation_delivery_id(
     return f"reconciliation-{digest}"
 
 
-def _comment_manifest_delivery_id(repo: str, resource: SyncResource) -> str:
-    """Deduplicate a complete comment set independently of the poll clock."""
+def _comment_manifest_delivery_id(
+    repo: str,
+    resource: SyncResource,
+    previous: SyncResource | None,
+) -> str:
+    """Identify one durable manifest transition, independently of retry time.
+
+    Content identity alone is insufficient: a set can return to an earlier
+    value (``[a] -> [a, b] -> [a]``), but the final transition must still be
+    delivered.  The previous checkpoint generation distinguishes later state
+    transitions while remaining stable across a retry that did not advance
+    the checkpoint.
+    """
     digest = _sha256(
         {
             "repo": canonical_repo(repo),
             "resource_identity": resource.identity,
+            "previous_fingerprint": previous.fingerprint if previous else None,
+            "previous_observed_at": previous.last_observed_at if previous else None,
             "content_fingerprint": resource.fingerprint,
         }
     )
@@ -618,7 +631,7 @@ def _event_for_resource(
     previous: SyncResource | None,
 ) -> RepoEvent:
     delivery_id = (
-        _comment_manifest_delivery_id(repo, resource)
+        _comment_manifest_delivery_id(repo, resource, previous)
         if resource.kind == "comment_manifest"
         else reconciliation_delivery_id(
             repo,

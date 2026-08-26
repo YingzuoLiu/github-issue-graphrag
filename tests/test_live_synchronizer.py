@@ -381,6 +381,57 @@ def test_rebaseline_manifest_repairs_a_deleted_comment_through_the_single_writer
     assert "91" in state.items[document_id].deleted_comments
 
 
+def test_comment_manifest_state_return_is_a_new_durable_transition(tmp_path):
+    """A -> B -> A must not reuse A's original manifest delivery id."""
+    issue = _issue_resource()
+    first_comment = _comment_resource(comment_id="91")
+    second_comment = _comment_resource(comment_id="92", updated_at=LATER)
+    first_manifest = _comment_manifest_resource(["91"], observed_at=NOW)
+    synchronizer, paths = _synchronizer(
+        tmp_path,
+        StaticObserver(_observation([issue, first_comment, first_manifest])),
+    )
+
+    first = synchronizer.sync_once(now=NOW)
+    assert first.status == "succeeded"
+    _drain(paths, NOW)
+
+    expanded_at = "2026-08-24T02:15:00Z"
+    expanded_manifest = _comment_manifest_resource(
+        ["91", "92"],
+        observed_at=expanded_at,
+    )
+    expanded = ScheduledSynchronizer(
+        repo=paths.repo,
+        inbox=DeliveryInbox(paths.inbox),
+        sync_state_path=paths.sync_state,
+        freshness_path=paths.freshness,
+        observer=StaticObserver(
+            _observation([issue, first_comment, second_comment, expanded_manifest])
+        ),
+    ).sync_once(now=expanded_at)
+    assert expanded.status == "succeeded"
+    _drain(paths, expanded_at)
+
+    returned_at = "2026-08-24T02:30:00Z"
+    returned_manifest = _comment_manifest_resource(["91"], observed_at=returned_at)
+    returned = ScheduledSynchronizer(
+        repo=paths.repo,
+        inbox=DeliveryInbox(paths.inbox),
+        sync_state_path=paths.sync_state,
+        freshness_path=paths.freshness,
+        observer=StaticObserver(_observation([issue, first_comment, returned_manifest])),
+    ).sync_once(now=returned_at)
+
+    assert returned.status == "succeeded"
+    assert returned.enqueued == 1 and returned.duplicates == 0
+    _drain(paths, returned_at)
+    document_id = f"{REPO}#issue-7"
+    state = read_state(paths.state)
+    assert set(state.items[document_id].comments) == {"91"}
+    assert "92" in state.items[document_id].deleted_comments
+
+
 class FailOnSecondEnqueue:
     def __init__(self, inbox: DeliveryInbox):
         self.inbox = inbox
