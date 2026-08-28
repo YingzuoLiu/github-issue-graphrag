@@ -4,10 +4,10 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.12-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-An operator-configured, read-only Contribution Opportunity Radar for GitHub repositories. It
-combines signed webhooks and scheduled observations to answer which issues are actionable now,
-why, and what changed since the last observation — while keeping GitHub facts separate from
-LLM-inferred context.
+An operator-configured, read-only Contribution Opportunity Radar for GitHub repositories, powered
+by a versioned GraphRAG pipeline. It combines signed webhooks and scheduled observations to answer
+which issues are actionable now, why, and what changed since the last observation — while keeping
+GitHub facts separate from LLM-inferred context.
 
 The project has two halves:
 
@@ -32,6 +32,8 @@ flowchart TD
     D --> E
     E --> F["Contribution Radar: what, why and what changed"]
 ```
+
+![Contribution Radar showing deterministic ranking, GitHub facts, inferred context and freshness warnings](examples/contribution_radar_readme.png)
 
 ## Run it now
 
@@ -94,12 +96,13 @@ Contribution opportunities (now)
          - 1 linked technical concepts: Hybrid Retrieval (+0.20)
 ```
 
-The Streamlit app (`pip install -e ".[app]" && streamlit run app.py`) opens on a read-only
-Contribution Radar with Ready, Claimed, Blocked and Recently changed views. The event timeline and
-graph remain available as secondary inspection tools. The fixture replay, contribution report and
-Radar over that generated state run offline. Fetching or synchronizing current GitHub data needs
-network access (and sometimes a token); batch generation, answer generation and `--llm` extraction
-need the configured model provider.
+The Streamlit app
+(`pip install -e ".[app]" && streamlit run app.py --browser.gatherUsageStats=false`) opens on a
+read-only Contribution Radar with Ready, Claimed, Blocked and Recently changed views. The event
+timeline and graph remain available as secondary inspection tools. The fixture replay, contribution
+report and Radar over that generated state run offline. Fetching or synchronizing current GitHub
+data needs network access (and sometimes a token); batch generation, answer generation and `--llm`
+extraction need the configured model provider.
 
 ## Contents
 
@@ -1214,10 +1217,10 @@ This project demonstrates:
   published. M5 adds deterministic scheduled current-state reconciliation through the existing
   durable inbox and single-writer lane, with conditional requests and visible source staleness.
   M6 makes Contribution Radar the default user flow with deterministic status views, traceable
-  evidence, repository isolation, visible freshness/degradation and privacy-bounded analytics.
-- M7 deployment work is in progress. Bounded checkpoint recovery and the provider-neutral Compose,
-  health/readiness, restart, backup and restore foundation are merged. There is no claimed public
-  URL, cloud apply, real public E2E acceptance or `v0.4.0` tag yet.
+  evidence, repository isolation, visible freshness/degradation and privacy-bounded analytics. M7
+  deployment work is in progress: bounded checkpoint recovery and the provider-neutral Compose,
+  health/readiness, restart, backup and restore foundation are merged, but there is no claimed
+  public URL, cloud apply, real public E2E acceptance or `v0.4.0` tag yet.
 
 ## Future work
 
