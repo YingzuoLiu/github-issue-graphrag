@@ -21,7 +21,8 @@ service is ready.
 
 | Service | Published network | Durable access | Secrets | Responsibility |
 |---|---|---|---|---|
-| `proxy` | host HTTP port in this foundation | none | none | Caddy routing, body limit and security headers |
+| `proxy` | host HTTP port; explicit `local` profile only | none | none | Caddy routing for local/CI smoke |
+| `public-proxy` | host TCP 80/443; `public` profile | ACME state RW | none | reviewed TLS, body, concurrency and rate limits |
 | `viewer` | internal `8501` only | repo data RO; analytics RW | none | public Contribution Radar only |
 | `receiver` | internal `8000` only | repo data RW | webhook HMAC secret | verify and durably enqueue |
 | `worker` | none | repo data RW | read-only GitHub token | single-writer state commit; facts only in this foundation |
@@ -59,13 +60,15 @@ The application also supports `GITHUB_TOKEN_FILE`, `GITHUB_WEBHOOK_SECRET_FILE` 
 Render and validate the exact security topology before startup:
 
 ```bash
-docker compose --env-file .env.deploy --profile live --profile ops \
+docker compose --env-file .env.deploy --profile local --profile live --profile ops \
   config --format json > /tmp/issue-graphrag-compose.json
 python scripts/check_compose_contract.py /tmp/issue-graphrag-compose.json
 ```
 
-Only `proxy` may have a published port. A rendered config that gives the Viewer a secret or a
-writable repo-data mount is rejected.
+Only the local `proxy` may publish a port in this foundation. The provider overlay separately
+requires `public-proxy` to publish exactly 80/443, pin its image, receive no credentials or Docker
+socket, and mount only its generated routing file read-only plus ACME state read-write. A rendered
+config that gives the Viewer a secret or a writable repo-data mount is rejected.
 
 ## Startup, health and shutdown
 
@@ -76,8 +79,8 @@ docker compose --env-file .env.deploy up --build -d receiver worker viewer proxy
 ```
 
 Add `--profile live` when the real GitHub token and repository are ready for scheduled sync. The
-provider deployment will replace the local `:8080` site address with an approved TLS hostname and
-reviewed edge limits.
+provider path uses `compose.public.yaml` and the generated pre-apply artifacts documented in
+`docs/m7-preapply-package.md`; it never starts the local Caddy service.
 
 Receiver endpoints deliberately have different semantics:
 

@@ -221,6 +221,7 @@ def test_radar_is_default_and_opens_traceable_issue_detail(
 def test_public_mode_exposes_only_radar_and_writes_separate_analytics(
     tmp_path, monkeypatch
 ):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     repo = "owner/public"
     _write_repo(tmp_path / "repos", repo, _single_issue_state(repo, 11, "Public issue"))
     _configure(monkeypatch, tmp_path / "repos", (repo,))

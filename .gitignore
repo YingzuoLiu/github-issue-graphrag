@@ -51,3 +51,6 @@ logs/
 # Time-varying pilot monitoring artifacts
 eval/pilot_runs/
 eval/sync_probe/
+
+# Provider pre-apply outputs may contain exact account and hostname decisions.
+deploy/aws-lightsail/rendered/
