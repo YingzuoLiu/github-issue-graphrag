@@ -4,22 +4,36 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.12-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-An event-driven repository intelligence graph that connects issues, discussions, pull requests
-and code modules to explain what changed, why it matters, and where contributors can act next.
+An operator-configured, read-only Contribution Opportunity Radar for GitHub repositories, powered
+by a versioned GraphRAG pipeline. It combines signed webhooks and scheduled observations to answer
+which issues are actionable now, why, and what changed since the last observation — while keeping
+GitHub facts separate from LLM-inferred context.
 
 The project has two halves:
 
 - **Batch GraphRAG index (v0.1, complete).** Turns a snapshot of GitHub issues into an entity
   graph with community reports, and answers contribution-oriented questions with grounded context.
-- **Live contribution graph (v0.3, productization on `0.4.0.dev0`).** Receives signed GitHub
-  webhooks and deterministic scheduled observations through the same durable inbox, then applies
-  them to a versioned, ontology-checked fact store so the graph updates incrementally and can say
-  how each observation moved the recommendations. See
+- **Contribution Radar and live graph (v0.3 core, productization on `0.4.0.dev0`).** Receives
+  supported issue, pull-request and comment changes through signed GitHub webhooks or deterministic
+  scheduled observations, applies them through the same durable inbox to a versioned,
+  ontology-checked fact store, and explains how each observation moved the recommendations. See
   [Live contribution graph](#live-contribution-graph-v03).
 
-The demo dataset is TrustGraph, but both halves work against any GitHub repository.
+The demo dataset is TrustGraph. Both halves can target operator-configured repositories within the
+documented event, pagination and storage bounds: an owned repository can use signed webhooks, while
+public repositories can use bounded, read-only scheduled synchronization.
 
-![Live contribution graph](examples/live_contribution_graph.png)
+```mermaid
+flowchart TD
+    A["Signed webhook or bounded read-only sync"] --> B["Durable per-repository inbox and single writer"]
+    B --> C["Versioned GitHub facts"]
+    B --> D["Optional, schema-checked inferred context"]
+    C --> E["Reproducible status, ranking and evidence"]
+    D --> E
+    E --> F["Contribution Radar: what, why and what changed"]
+```
+
+![Contribution Radar showing deterministic ranking, GitHub facts, inferred context and freshness warnings](examples/contribution_radar_readme.png)
 
 ## Run it now
 
@@ -82,10 +96,13 @@ Contribution opportunities (now)
          - 1 linked technical concepts: Hybrid Retrieval (+0.20)
 ```
 
-The Streamlit app (`pip install -e ".[app]" && streamlit run app.py`) opens on a read-only
-Contribution Radar with Ready, Claimed, Blocked and Recently changed views. The event timeline and
-graph remain available as secondary inspection tools. After installation, everything above runs
-offline; only the batch index and `--llm` extraction need a provider key.
+The Streamlit app
+(`pip install -e ".[app]" && streamlit run app.py --browser.gatherUsageStats=false`) opens on a
+read-only Contribution Radar with Ready, Claimed, Blocked and Recently changed views. The event
+timeline and graph remain available as secondary inspection tools. The fixture replay, contribution
+report and Radar over that generated state run offline. Fetching or synchronizing current GitHub
+data needs network access (and sometimes a token); batch generation, answer generation and `--llm`
+extraction need the configured model provider.
 
 ## Contents
 
@@ -205,8 +222,6 @@ This makes it easier to answer questions like:
 The Streamlit app starts with contribution opportunities, plain-language reasons and traceable
 GitHub evidence. Its separate local-demo page still supports retrieval-mode selection, grounded
 answers and context inspection when a batch index is present.
-
-![Streamlit demo](examples/demo_screenshot.png)
 
 ## Current features
 
@@ -410,9 +425,9 @@ TrustGraph, so the data does not support a general human-efficiency claim. See t
 
 Expensive work is scoped. Cheap work is not.
 
-- **Scoped:** LLM extraction runs only for documents whose text actually changed, and community
-  reports regenerate only for communities whose membership changed. These are the calls that cost
-  money and latency.
+- **Scoped:** live entity/relation extraction runs only for documents whose text actually changed.
+  The standalone community-report helper also skips unchanged report inputs, but it is not yet
+  wired into the event loop. These are the calls that cost money and latency.
 - **Not scoped:** GitHub-stated facts are re-derived for every document on every event, and the
   graph is folded fresh from the fact set. Both are pure string and dictionary work measured in
   microseconds.
@@ -522,9 +537,10 @@ this pipeline — the fact lifecycle, the deterministic derivation and the proje
 same graph whether they got there in six steps or one — rather than a statement about the model.
 `--re-extract` additionally re-runs extraction; with the fixture extractor that is a useful
 stability check, but against a live model it measures the model's repeatability, so it is reported
-separately and never as a consistency guarantee. Making a live model reproducible here would mean
-caching extraction output keyed by document signature, model id and prompt version; that is listed
-under future work, not claimed.
+separately and never as a consistency guarantee. The durable M4 semantic-worker path caches
+validated extraction output under a stricter identity that includes content, prompt and schema
+hashes, requested model, gateway and live chunk parameters. That cache prevents avoidable repeat
+calls; it does not make a deliberately re-run live model deterministic.
 
 The fingerprint includes edge direction, per-relation origin and evidence. An earlier version
 compared only undirected relation labels, which meant a reversed `closes` edge or a fact that had
@@ -811,7 +827,7 @@ leaves the previous checkpoint intact and marks source freshness stale. See
 [`docs/sync-checkpoint-operations.md`](docs/sync-checkpoint-operations.md) for checkpoint
 retention, hard limits, corruption recovery, confirmation and rollback.
 
-### What v0.3 deliberately does not do
+### Current boundaries
 
 - It does not yet authenticate as a GitHub App or reconstruct missed delivery chronology. The
   scheduled synchronizer converges the bounded current state; exact historical delivery recovery
@@ -1200,6 +1216,11 @@ This project demonstrates:
   makes live extraction deterministic-first, cached, quota-bounded, resumable and atomically
   published. M5 adds deterministic scheduled current-state reconciliation through the existing
   durable inbox and single-writer lane, with conditional requests and visible source staleness.
+  M6 makes Contribution Radar the default user flow with deterministic status views, traceable
+  evidence, repository isolation, visible freshness/degradation and privacy-bounded analytics. M7
+  deployment work is in progress: bounded checkpoint recovery and the provider-neutral Compose,
+  health/readiness, restart, backup and restore foundation are merged, but there is no claimed
+  public URL, cloud apply, real public E2E acceptance or `v0.4.0` tag yet.
 
 ## Future work
 
@@ -1213,15 +1234,16 @@ This project demonstrates:
 - **Wire scoped report regeneration into the event loop**, so community reports refresh when the
   communities they describe actually change.
 - **Pull requests as opportunities**: rank PRs that need review alongside unclaimed issues.
-- **Optional contributor and maintainer pilot**: if recruitment becomes practical, time
-  issue-selection tasks and review conservative plain-reference cases before claiming lower human
-  burden. This is not required for the current engineering-only claim.
+- **Post-deployment contributor and maintainer pilot**: time issue-selection tasks and review
+  conservative plain-reference cases before claiming lower human burden.
 - **Narrow deterministic re-derivation**: index documents by the issue numbers they mention so the
   GitHub-fact pass scales past a few thousand documents.
 - **Relation direction cleanup**: the live graph keeps direction on every edge; the batch pipeline
   still needs validation rules for `improves`, `depends_on`, and `uses`.
 - **Richer source citation formatting**: improve generated answers so they cite issue numbers and source snippets more consistently.
-- **Optional deployment**: package a Streamlit Cloud demo with sample data and secrets management.
+- **Complete M7 deployment acceptance**: independently review and apply the provider plan, then
+  verify the approved TLS edge, durable storage, secrets, cost controls, public E2E, restart,
+  rollback and `v0.4.0` release evidence before calling the Radar deployed.
 
 ## License
 
